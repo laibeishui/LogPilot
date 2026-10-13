@@ -1,0 +1,412 @@
+@{
+  ViewData["Title"] = "日志检索";
+}
+<div class="headline">
+  <div>
+    <h1>日志检索</h1>
+    <p>按项目、时间、服务、级别与关键词查询 VictoriaLogs。</p>
+  </div>
+</div>
+
+<div id="notice" class="notice" style="display:none"></div>
+
+<div class="card" style="margin-bottom:18px">
+  <div class="range-tabs" id="rangeTabs">
+    <button class="btn active" type="button" data-range="15">最近 15 分钟</button>
+    <button class="btn" type="button" data-range="60">最近 1 小时</button>
+    <button class="btn" type="button" data-range="1440">最近 24 小时</button>
+  </div>
+  <div class="filters" style="grid-template-columns: minmax(160px,1.4fr) minmax(120px,1fr) minmax(120px,1fr) minmax(160px,1.4fr) minmax(160px,1.2fr) auto auto;">
+    <div>
+      <label for="projectId">项目</label>
+      <select id="projectId" class="field"></select>
+    </div>
+    <div>
+      <label for="service">服务</label>
+      <select id="service" class="field">
+        <option value="">全部</option>
+      </select>
+    </div>
+    <div>
+      <label for="level">级别</label>
+      <select id="level" class="field">
+        <option value="">全部</option>
+      </select>
+    </div>
+    <div>
+      <label for="keyword">关键词</label>
+      <input id="keyword" class="field" placeholder="消息 / 异常" />
+    </div>
+    <div>
+      <label for="traceId">TraceId</label>
+      <input id="traceId" class="field" placeholder="精确匹配" />
+    </div>
+    <div>
+      <button class="btn primary" id="btnSearch" type="button">查询</button>
+    </div>
+    <div>
+      <button class="btn" id="btnReset" type="button">重置</button>
+    </div>
+  </div>
+  <div class="muted" id="rangeHint" style="font-size:12px"></div>
+</div>
+
+<div class="card">
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>级别</th>
+          <th>服务</th>
+          <th>消息</th>
+          <th>TraceId</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="5" class="muted">选择项目后点击查询</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    <span class="muted" id="resultMeta">尚未查询</span>
+    <button class="btn" id="btnMore" type="button" style="display:none">加载更早</button>
+  </div>
+</div>
+
+<div class="drawer-back" id="drawerBack"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <header>
+    <h2>日志详情</h2>
+    <button class="btn" id="btnCloseDrawer" type="button">关闭</button>
+  </header>
+  <div class="inner" id="drawerBody">
+    <div class="muted">加载中…</div>
+  </div>
+</aside>
+
+@section Scripts {
+<script>
+  (() => {
+    const projectSelect = document.getElementById('projectId');
+    const serviceSelect = document.getElementById('service');
+    const levelSelect = document.getElementById('level');
+    const keywordInput = document.getElementById('keyword');
+    const traceInput = document.getElementById('traceId');
+    const tbody = document.getElementById('tbody');
+    const notice = document.getElementById('notice');
+    const rangeHint = document.getElementById('rangeHint');
+    const resultMeta = document.getElementById('resultMeta');
+    const btnSearch = document.getElementById('btnSearch');
+    const btnMore = document.getElementById('btnMore');
+    const drawer = document.getElementById('drawer');
+    const drawerBack = document.getElementById('drawerBack');
+    const drawerBody = document.getElementById('drawerBody');
+    const params = new URLSearchParams(location.search);
+
+    let rangeMinutes = Number(params.get('range') || 15);
+    if (![15, 60, 1440].includes(rangeMinutes)) rangeMinutes = 15;
+    let nextCursor = null;
+    let hasMore = false;
+    let lastItems = [];
+    let lastRange = null;
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function showNotice(text, isError) {
+      notice.style.display = 'block';
+      notice.textContent = text;
+      notice.style.background = isError ? '#ffebee' : '#fff8e9';
+      notice.style.color = isError ? '#d74652' : '#8a6420';
+      notice.style.borderColor = isError ? '#ffcdd2' : '#ffe8ba';
+    }
+
+    function hideNotice() {
+      notice.style.display = 'none';
+    }
+
+    function levelClass(level) {
+      const v = String(level || '').toLowerCase();
+      if (v.includes('error') || v.includes('fatal')) return 'error';
+      if (v.includes('warn')) return 'warn';
+      if (v.includes('debug') || v.includes('trace')) return 'debug';
+      return 'info';
+    }
+
+    function syncRangeTabs() {
+      document.querySelectorAll('#rangeTabs .btn').forEach(btn => {
+        btn.classList.toggle('active', Number(btn.dataset.range) === rangeMinutes);
+      });
+    }
+
+    function currentRange() {
+      const end = new Date();
+      const start = new Date(end.getTime() - rangeMinutes * 60 * 1000);
+      return { start, end };
+    }
+
+    function updateRangeHint() {
+      const { start, end } = currentRange();
+      rangeHint.textContent = `时间窗：${start.toLocaleString()} ~ ${end.toLocaleString()}（按本机时区展示）`;
+    }
+
+    async function loadProjects() {
+      const items = await LogPilotApi.api('/api/v1/projects');
+      projectSelect.innerHTML = items.map(p =>
+        `<option value="${p.id}">${escapeHtml(p.name)} (${escapeHtml(p.code)})</option>`
+      ).join('') || '<option value="">暂无项目</option>';
+      const preset = params.get('projectId');
+      if (preset) projectSelect.value = preset;
+      if (projectSelect.value) await loadFilters();
+    }
+
+    async function loadFilters() {
+      const projectId = projectSelect.value;
+      if (!projectId) return;
+      const { start, end } = currentRange();
+      const qs = new URLSearchParams({
+        projectId,
+        startTime: start.toISOString(),
+        endTime: end.toISOString()
+      });
+      try {
+        const filters = await LogPilotApi.api('/api/v1/logs/filters?' + qs.toString());
+        const prevService = serviceSelect.value;
+        const prevLevel = levelSelect.value;
+        serviceSelect.innerHTML = '<option value="">全部</option>' +
+          (filters.services || []).map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+        levelSelect.innerHTML = '<option value="">全部</option>' +
+          (filters.levels || []).map(l => `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`).join('');
+        if (prevService) serviceSelect.value = prevService;
+        if (prevLevel) levelSelect.value = prevLevel;
+      } catch (e) {
+        // 筛选候选失败不阻断主查询
+        console.warn(e);
+      }
+    }
+
+    function renderRows(items, append) {
+      if (!append) {
+        if (!items.length) {
+          tbody.innerHTML = '<tr><td colspan="5" class="muted">无结果。可放宽时间或清除筛选后重试。</td></tr>';
+          return;
+        }
+        tbody.innerHTML = '';
+      }
+
+      const html = items.map(item => `
+        <tr class="clickable" data-id="${escapeHtml(item.id)}" data-ts="${escapeHtml(item.timestamp)}">
+          <td>${escapeHtml(new Date(item.timestamp).toLocaleString())}</td>
+          <td><span class="tag ${levelClass(item.level)}">${escapeHtml(item.level)}</span></td>
+          <td>${escapeHtml(item.serviceName)}</td>
+          <td class="msg" title="${escapeHtml(item.message)}">${escapeHtml(item.message)}</td>
+          <td><code>${escapeHtml(item.traceId || '-')}</code></td>
+        </tr>`).join('');
+      tbody.insertAdjacentHTML('beforeend', html);
+    }
+
+    async function search(append) {
+      const projectId = projectSelect.value;
+      if (!projectId) {
+        showNotice('请先创建并选择项目', true);
+        return;
+      }
+
+      hideNotice();
+      btnSearch.disabled = true;
+      btnMore.disabled = true;
+      if (!append) {
+        nextCursor = null;
+        lastItems = [];
+        tbody.innerHTML = '<tr><td colspan="5" class="muted">查询中…</td></tr>';
+      }
+
+      const range = currentRange();
+      lastRange = range;
+      const body = {
+        projectId: Number(projectId),
+        startTime: range.start.toISOString(),
+        endTime: range.end.toISOString(),
+        services: serviceSelect.value ? [serviceSelect.value] : [],
+        levels: levelSelect.value ? [levelSelect.value] : [],
+        keyword: keywordInput.value.trim() || null,
+        traceId: traceInput.value.trim() || null,
+        pageSize: 50,
+        cursor: append ? nextCursor : null
+      };
+
+      try {
+        const result = await LogPilotApi.api('/api/v1/logs/search', { method: 'POST', body });
+        const items = result.items || [];
+        if (append) lastItems = lastItems.concat(items);
+        else lastItems = items;
+        nextCursor = result.nextCursor || null;
+        hasMore = !!result.hasMore;
+        renderRows(items, append);
+        resultMeta.textContent = `已显示 ${lastItems.length} 条` + (hasMore ? '（还有更早日志）' : '');
+        btnMore.style.display = hasMore ? '' : 'none';
+        updateUrl();
+      } catch (e) {
+        if (!append) {
+          tbody.innerHTML = `<tr><td colspan="5">${escapeHtml(e.message || '查询失败')}</td></tr>`;
+          resultMeta.textContent = '查询失败';
+          btnMore.style.display = 'none';
+        }
+        showNotice(e.message || '查询失败', true);
+      } finally {
+        btnSearch.disabled = false;
+        btnMore.disabled = false;
+      }
+    }
+
+    function updateUrl() {
+      const q = new URLSearchParams();
+      if (projectSelect.value) q.set('projectId', projectSelect.value);
+      q.set('range', String(rangeMinutes));
+      if (serviceSelect.value) q.set('service', serviceSelect.value);
+      if (levelSelect.value) q.set('level', levelSelect.value);
+      if (keywordInput.value.trim()) q.set('keyword', keywordInput.value.trim());
+      if (traceInput.value.trim()) q.set('traceId', traceInput.value.trim());
+      history.replaceState(null, '', '/logs?' + q.toString());
+    }
+
+    function openDrawer() {
+      drawer.classList.add('open');
+      drawerBack.classList.add('open');
+      drawer.setAttribute('aria-hidden', 'false');
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove('open');
+      drawerBack.classList.remove('open');
+      drawer.setAttribute('aria-hidden', 'true');
+    }
+
+    async function showDetail(id, timestamp) {
+      const projectId = projectSelect.value;
+      if (!projectId || !lastRange) return;
+      openDrawer();
+      drawerBody.innerHTML = '<div class="muted">加载中…</div>';
+      const qs = new URLSearchParams({
+        projectId,
+        startTime: lastRange.start.toISOString(),
+        endTime: lastRange.end.toISOString()
+      });
+      try {
+        const d = await LogPilotApi.api('/api/v1/logs/' + encodeURIComponent(id) + '?' + qs.toString());
+        const attrs = d.attributes || {};
+        const attrLines = Object.keys(attrs).length
+          ? Object.entries(attrs).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')
+          : '无';
+        drawerBody.innerHTML = `
+          <div class="grid2">
+            <div><span class="label">事件 ID</span><code>${escapeHtml(d.id)}</code></div>
+            <div><span class="label">级别</span><span class="tag ${levelClass(d.level)}">${escapeHtml(d.level)}</span></div>
+            <div><span class="label">事件时间</span>${escapeHtml(new Date(d.timestamp).toLocaleString())}</div>
+            <div><span class="label">接收时间</span>${d.receivedAt ? escapeHtml(new Date(d.receivedAt).toLocaleString()) : '无'}</div>
+            <div><span class="label">服务</span>${escapeHtml(d.serviceName)}</div>
+            <div><span class="label">环境</span>${escapeHtml(d.environment || '-')}</div>
+            <div><span class="label">TraceId</span><code>${escapeHtml(d.traceId || '-')}</code></div>
+            <div><span class="label">SpanId</span><code>${escapeHtml(d.spanId || '-')}</code></div>
+          </div>
+          <span class="label">消息</span>
+          <div class="code" id="detailMessage">${escapeHtml(d.message)}</div>
+          <span class="label">异常</span>
+          <div class="code">${escapeHtml([d.exceptionType, d.exceptionMessage, d.exceptionStack].filter(Boolean).join('\n') || '无')}</div>
+          <span class="label">自定义属性</span>
+          <div class="code">${escapeHtml(attrLines)}</div>
+          <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" type="button" id="btnCopyMsg">复制消息</button>
+            <button class="btn" type="button" id="btnCopyTrace">复制 TraceId</button>
+            <button class="btn" type="button" id="btnCopyJson">复制 JSON</button>
+          </div>`;
+        document.getElementById('btnCopyMsg').onclick = () => copyText(d.message);
+        document.getElementById('btnCopyTrace').onclick = () => copyText(d.traceId || '');
+        document.getElementById('btnCopyJson').onclick = () => copyText(JSON.stringify(d, null, 2));
+      } catch (e) {
+        drawerBody.innerHTML = `<div class="muted">${escapeHtml(e.message || '加载详情失败')}</div>`;
+      }
+    }
+
+    async function copyText(text) {
+      if (!text) {
+        showNotice('无可复制内容', true);
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        showNotice('已复制');
+      } catch {
+        showNotice('复制失败，请手动选择', true);
+      }
+    }
+
+    document.getElementById('rangeTabs').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-range]');
+      if (!btn) return;
+      rangeMinutes = Number(btn.dataset.range);
+      syncRangeTabs();
+      updateRangeHint();
+      nextCursor = null;
+      await loadFilters();
+    });
+
+    projectSelect.addEventListener('change', async () => {
+      nextCursor = null;
+      await loadFilters();
+    });
+
+    btnSearch.addEventListener('click', () => search(false));
+    btnMore.addEventListener('click', () => search(true));
+    document.getElementById('btnReset').addEventListener('click', async () => {
+      rangeMinutes = 15;
+      serviceSelect.value = '';
+      levelSelect.value = '';
+      keywordInput.value = '';
+      traceInput.value = '';
+      syncRangeTabs();
+      updateRangeHint();
+      await loadFilters();
+      await search(false);
+    });
+
+    keywordInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') search(false);
+    });
+    traceInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') search(false);
+    });
+
+    tbody.addEventListener('click', (e) => {
+      const tr = e.target.closest('tr[data-id]');
+      if (!tr) return;
+      showDetail(tr.dataset.id, tr.dataset.ts);
+    });
+
+    document.getElementById('btnCloseDrawer').addEventListener('click', closeDrawer);
+    drawerBack.addEventListener('click', closeDrawer);
+
+    // URL 预填
+    if (params.get('keyword')) keywordInput.value = params.get('keyword');
+    if (params.get('traceId')) traceInput.value = params.get('traceId');
+    if (params.get('service')) serviceSelect.dataset.preset = params.get('service');
+    if (params.get('level')) levelSelect.dataset.preset = params.get('level');
+
+    syncRangeTabs();
+    updateRangeHint();
+    loadProjects()
+      .then(async () => {
+        if (serviceSelect.dataset.preset) serviceSelect.value = serviceSelect.dataset.preset;
+        if (levelSelect.dataset.preset) levelSelect.value = levelSelect.dataset.preset;
+        if (projectSelect.value && (params.get('auto') === '1' || params.get('projectId'))) {
+          await search(false);
+        }
+      })
+      .catch(e => showNotice(e.message || '加载失败', true));
+  })();
+</script>
+}

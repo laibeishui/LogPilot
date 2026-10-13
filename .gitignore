@@ -2,8 +2,10 @@
 bin/
 obj/
 [Bb]uild/
-[Ll]og/
-[Ll]ogs/
+# 仅忽略仓库根目录运行日志，避免误伤源码命名空间（如 Application/Logs、Views/Logs、Otlp/.../logs）
+/[Ll]og/
+/[Ll]ogs/
+*.log
 *.user
 *.userosscache
 *.suo
@@ -31,6 +33,7 @@ Desktop.ini
 ## Local data & secrets
 .env
 deploy/.env
+examples/dotnet-console-ingest/local.settings.json
 *.db
 *.db-shm
 *.db-wal
