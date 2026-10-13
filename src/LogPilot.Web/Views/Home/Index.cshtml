@@ -1,0 +1,38 @@
+﻿@{
+  ViewData["Title"] = "总览";
+}
+<div class="headline">
+  <div>
+    <h1>运行总览</h1>
+    <p>轻量自托管日志中心。写入与检索主路径已打通。</p>
+  </div>
+  <div>
+    <a class="btn primary" asp-controller="Logs" asp-action="Index">查询日志 →</a>
+  </div>
+</div>
+
+<div class="kpis">
+  <div class="card kpi">
+    <div class="muted">认证</div>
+    <div class="val green">已登录</div>
+    <div class="muted">Cookie 会话 + CSRF</div>
+  </div>
+  <div class="card kpi">
+    <div class="muted">元数据</div>
+    <div class="val">SQLite</div>
+    <div class="muted">项目 / 成员 / API Key</div>
+  </div>
+  <div class="card kpi">
+    <div class="muted">下一步</div>
+    <div class="val">M5</div>
+    <div class="muted">Compose / 示例 / README</div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px">
+  <div class="rows">
+    <div class="line"><span>快捷入口</span><a asp-controller="Integrations" asp-action="Index">接入中心</a></div>
+    <div class="line"><span>健康探针</span><a href="/health/ready">/health/ready</a></div>
+    <div class="line"><span>当前用户</span><a href="/api/v1/auth/me">/api/v1/auth/me</a></div>
+  </div>
+</div>

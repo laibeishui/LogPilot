@@ -1,0 +1,174 @@
+@{
+  ViewData["Title"] = "接入中心";
+}
+<div class="headline">
+  <div>
+    <h1>接入中心</h1>
+    <p>生成项目 Token（只显示一次）。JSON 与 OTLP 写入已可用；检索页在 M4 接入。</p>
+  </div>
+</div>
+
+<div id="notice" class="notice" style="display:none"></div>
+
+<div class="card" style="margin-bottom:18px">
+  <div class="rows">
+    <div>
+      <label class="muted" for="projectId">选择项目</label>
+      <select id="projectId" class="field"></select>
+    </div>
+    <div>
+      <label class="muted" for="keyName">密钥名称</label>
+      <input id="keyName" class="field" maxlength="100" placeholder="例如 api-prod" />
+    </div>
+    <div>
+      <button class="btn primary" id="btnCreateKey" type="button">生成 Token</button>
+    </div>
+  </div>
+</div>
+
+<div class="card" id="secretPanel" style="display:none;margin-bottom:18px">
+  <div class="notice">请立即复制并安全保存。关闭后无法再次查看明文。</div>
+  <pre id="secretValue" style="white-space:pre-wrap;word-break:break-all;background:#13213a;color:#d9e7ff;padding:14px;border-radius:9px"></pre>
+  <button class="btn" id="btnCopy" type="button">复制 Token</button>
+</div>
+
+<div class="card">
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>前缀</th>
+          <th>状态</th>
+          <th>创建时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="5" class="muted">请先选择项目</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px">
+  <h3 style="margin-top:0">接入示例（配置示意）</h3>
+  <pre class="muted" style="white-space:pre-wrap"># OTLP（推荐）
+OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://your-host/v1/logs
+OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf
+# Header: Authorization=Bearer &lt;your-token&gt;
+
+# HTTP JSON 批量
+curl -X POST "https://your-host/api/v1/ingest/logs" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"logs":[{"timestamp":"2026-10-13T10:00:00Z","serviceName":"demo-api","level":"Error","message":"Database timeout"}]}'</pre>
+</div>
+
+@section Scripts {
+<script>
+  (() => {
+    const projectSelect = document.getElementById('projectId');
+    const tbody = document.getElementById('tbody');
+    const notice = document.getElementById('notice');
+    const secretPanel = document.getElementById('secretPanel');
+    const params = new URLSearchParams(location.search);
+    const presetProjectId = params.get('projectId');
+
+    function showNotice(text, isError) {
+      notice.style.display = 'block';
+      notice.textContent = text;
+      notice.style.background = isError ? '#ffebee' : '#fff8e9';
+      notice.style.color = isError ? '#d74652' : '#8a6420';
+      notice.style.borderColor = isError ? '#ffcdd2' : '#ffe8ba';
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    async function loadProjects() {
+      const items = await LogPilotApi.api('/api/v1/projects');
+      projectSelect.innerHTML = items.map(p =>
+        `<option value="${p.id}">${escapeHtml(p.name)} (${escapeHtml(p.code)})</option>`
+      ).join('') || '<option value="">暂无项目</option>';
+      if (presetProjectId) projectSelect.value = presetProjectId;
+      if (projectSelect.value) await loadKeys();
+    }
+
+    async function loadKeys() {
+      const projectId = projectSelect.value;
+      if (!projectId) return;
+      try {
+        const keys = await LogPilotApi.api('/api/v1/projects/' + projectId + '/api-keys');
+        if (!keys.length) {
+          tbody.innerHTML = '<tr><td colspan="5" class="muted">尚无密钥</td></tr>';
+          return;
+        }
+        tbody.innerHTML = keys.map(k => `
+          <tr>
+            <td>${escapeHtml(k.name)}</td>
+            <td><code>${escapeHtml(k.prefix)}</code></td>
+            <td>${k.status === 'enabled' ? '启用' : '已撤销'}</td>
+            <td>${escapeHtml(new Date(k.createdAt).toLocaleString())}</td>
+            <td>${k.status === 'enabled'
+              ? `<button class="btn" data-revoke="${k.id}" type="button">撤销</button>`
+              : '-'}</td>
+          </tr>`).join('');
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5">${escapeHtml(e.message)}</td></tr>`;
+      }
+    }
+
+    document.getElementById('btnCreateKey').addEventListener('click', async () => {
+      const projectId = projectSelect.value;
+      const name = document.getElementById('keyName').value.trim() || 'default';
+      if (!projectId) {
+        showNotice('请先创建并选择项目', true);
+        return;
+      }
+      try {
+        const key = await LogPilotApi.api('/api/v1/projects/' + projectId + '/api-keys', {
+          method: 'POST',
+          body: { name, expiresAt: null }
+        });
+        secretPanel.style.display = 'block';
+        document.getElementById('secretValue').textContent = key.apiKey;
+        showNotice('Token 已生成，请立即保存');
+        document.getElementById('keyName').value = '';
+        await loadKeys();
+      } catch (e) {
+        showNotice(e.message || '生成失败', true);
+      }
+    });
+
+    document.getElementById('btnCopy').addEventListener('click', async () => {
+      const text = document.getElementById('secretValue').textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        showNotice('已复制到剪贴板');
+      } catch {
+        showNotice('复制失败，请手动选择', true);
+      }
+    });
+
+    tbody.addEventListener('click', async (e) => {
+      const id = e.target.getAttribute('data-revoke');
+      if (!id) return;
+      if (!confirm('撤销后该 Token 将立即失效，确认？')) return;
+      try {
+        await LogPilotApi.api('/api/v1/projects/' + projectSelect.value + '/api-keys/' + id, {
+          method: 'DELETE'
+        });
+        showNotice('密钥已撤销');
+        await loadKeys();
+      } catch (err) {
+        showNotice(err.message || '撤销失败', true);
+      }
+    });
+
+    projectSelect.addEventListener('change', loadKeys);
+    loadProjects().catch(e => showNotice(e.message || '加载失败', true));
+  })();
+</script>
+}

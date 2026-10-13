@@ -1,0 +1,67 @@
+@{
+  Layout = null;
+  ViewData["Title"] = "登录";
+}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 · LogPilot</title>
+  <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+  <style>
+    .auth-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .auth-card { width: min(420px, 100%); }
+    .auth-card h1 { margin: 0 0 8px; font-size: 24px; }
+    .formrow { margin-bottom: 14px; }
+    .formrow label { display: block; margin-bottom: 6px; color: #56657a; font-size: 13px; }
+    .error { color: #e44d5d; font-size: 13px; min-height: 18px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="card auth-card">
+      <h1>登录 LogPilot</h1>
+      <p class="muted">使用管理员或项目成员账号进入控制台。</p>
+      <div class="formrow">
+        <label for="username">账号</label>
+        <input id="username" class="field" maxlength="64" autocomplete="username" />
+      </div>
+      <div class="formrow">
+        <label for="password">密码</label>
+        <input id="password" type="password" class="field" maxlength="128" autocomplete="current-password" />
+      </div>
+      <button id="submit" class="btn primary" style="width:100%">登录</button>
+      <div id="error" class="error"></div>
+    </div>
+  </div>
+  <script src="~/js/common/api-client.js" asp-append-version="true"></script>
+  <script>
+    (() => {
+      const errorEl = document.getElementById('error');
+      const btn = document.getElementById('submit');
+      const login = async () => {
+        errorEl.textContent = '';
+        btn.disabled = true;
+        try {
+          await LogPilotApi.api('/api/v1/auth/login', {
+            method: 'POST',
+            body: {
+              username: document.getElementById('username').value.trim(),
+              password: document.getElementById('password').value
+            }
+          });
+          location.href = '/';
+        } catch (e) {
+          errorEl.textContent = e.message || '登录失败';
+          btn.disabled = false;
+        }
+      };
+      btn.addEventListener('click', login);
+      document.getElementById('password').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') login();
+      });
+    })();
+  </script>
+</body>
+</html>

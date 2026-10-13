@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LogPilot.Application/LogPilot.Application.csproj" />
+    <Project Path="src/LogPilot.Core/LogPilot.Core.csproj" />
+    <Project Path="src/LogPilot.Infrastructure/LogPilot.Infrastructure.csproj" />
+    <Project Path="src/LogPilot.Web/LogPilot.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LogPilot.IntegrationTests/LogPilot.IntegrationTests.csproj" />
+    <Project Path="tests/LogPilot.UnitTests/LogPilot.UnitTests.csproj" />
+  </Folder>
+</Solution>

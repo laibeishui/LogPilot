@@ -1,0 +1,54 @@
+﻿@using System.Security.Claims
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>@ViewData["Title"] · LogPilot</title>
+  <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body>
+@{
+  var current = ViewContext.RouteData.Values["controller"]?.ToString() ?? "Home";
+  var displayName = User.Identity?.Name ?? "用户";
+}
+  <div class="layout">
+    <aside class="nav">
+      <div class="brand"><span class="logo">◈</span>LogPilot</div>
+      <div class="navtitle">工作空间</div>
+      <a class="nav-link @(current == "Home" ? "active" : null)" asp-controller="Home" asp-action="Index"><span>▦</span><span class="txt">总览</span></a>
+      <a class="nav-link @(current == "Logs" ? "active" : null)" asp-controller="Logs" asp-action="Index"><span>☷</span><span class="txt">日志检索</span></a>
+      <a class="nav-link @(current == "Projects" ? "active" : null)" asp-controller="Projects" asp-action="Index"><span>▣</span><span class="txt">项目管理</span></a>
+      <a class="nav-link @(current == "Integrations" ? "active" : null)" asp-controller="Integrations" asp-action="Index"><span>⇄</span><span class="txt">接入中心</span></a>
+      <div class="navtitle">规划功能</div>
+      <a class="nav-link @(current == "Alerts" ? "active" : null)" asp-controller="Alerts" asp-action="Index"><span>♧</span><span class="txt">告警中心</span></a>
+      <a class="nav-link @(current == "Settings" ? "active" : null)" asp-controller="Settings" asp-action="Index"><span>⚙</span><span class="txt">系统设置</span></a>
+      <div class="foot">LogPilot V0.1 · M2</div>
+    </aside>
+    <main class="main">
+      <div class="top">
+        <div class="crumb">工作空间 / <strong>@ViewData["Title"]</strong></div>
+        <div class="topright">
+          <span class="pill">已登录</span>
+          <span class="small">@displayName</span>
+          <button class="btn" id="logoutBtn" type="button">退出</button>
+        </div>
+      </div>
+      <div class="content">
+        @RenderBody()
+      </div>
+    </main>
+  </div>
+  <script src="~/js/common/api-client.js" asp-append-version="true"></script>
+  <script src="~/js/site.js" asp-append-version="true"></script>
+  <script>
+    document.getElementById('logoutBtn')?.addEventListener('click', async () => {
+      try {
+        await LogPilotApi.api('/api/v1/auth/logout', { method: 'POST' });
+      } catch (_) { /* ignore */ }
+      location.href = '/account/login';
+    });
+  </script>
+  @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

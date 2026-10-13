@@ -1,0 +1,49 @@
+# LogPilot V0.1 全栈部署（LogPilot + VictoriaLogs）
+#
+#   cp deploy/.env.example deploy/.env
+#   docker compose -f deploy/compose.yml --env-file deploy/.env up -d --build
+#
+# 浏览器： http://localhost:${LOGPILOT_HTTP_PORT:-8080}
+# VictoriaLogs 默认不映射到宿主机（仅容器网络访问）。
+
+name: logpilot
+
+services:
+  logpilot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: logpilot:${LOGPILOT_IMAGE_TAG:-local}
+    restart: unless-stopped
+    ports:
+      - "${LOGPILOT_HTTP_PORT:-8080}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      Storage__Sqlite__DataSource: /app/data/logpilot.db
+      Storage__VictoriaLogs__BaseUrl: http://victorialogs:9428
+      Storage__VictoriaLogs__TimeoutSeconds: "${VICTORIALOGS_TIMEOUT_SECONDS:-10}"
+      Ingestion__MaxBatchRecords: "${INGEST_MAX_BATCH:-500}"
+      Ingestion__MaxBodyBytes: "${INGEST_MAX_BODY_BYTES:-1048576}"
+      Query__MaxRangeHours: "${QUERY_MAX_RANGE_HOURS:-24}"
+    volumes:
+      - ${LOGPILOT_DATA_PATH:-logpilot-data}:/app/data
+    depends_on:
+      - victorialogs
+
+  victorialogs:
+    image: victoriametrics/victoria-logs:${VICTORIALOGS_VERSION:-v1.53.0}
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/vlogs
+      - -retentionPeriod=${VICTORIALOGS_RETENTION:-7d}
+      - -httpListenAddr=:9428
+    volumes:
+      - ${VICTORIALOGS_DATA_PATH:-victorialogs-data}:/vlogs
+    # 需要宿主机调试 VL 时取消注释：
+    # ports:
+    #   - "9428:9428"
+
+volumes:
+  logpilot-data:
+  victorialogs-data:

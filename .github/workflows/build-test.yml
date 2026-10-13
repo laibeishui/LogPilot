@@ -1,0 +1,28 @@
+name: build-test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore LogPilot.slnx
+
+      - name: Build
+        run: dotnet build LogPilot.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test LogPilot.slnx --configuration Release --no-build --verbosity normal

@@ -1,0 +1,24 @@
+# 仅启动 VictoriaLogs —— 供 Windows / Linux 本机运行 LogPilot 时使用
+#
+#   docker compose -f deploy/compose.vl-only.yml --env-file deploy/.env up -d
+#
+# 本机 LogPilot 配置：
+#   Storage__VictoriaLogs__BaseUrl=http://127.0.0.1:9428
+
+name: logpilot-vl
+
+services:
+  victorialogs:
+    image: victoriametrics/victoria-logs:${VICTORIALOGS_VERSION:-v1.53.0}
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/vlogs
+      - -retentionPeriod=${VICTORIALOGS_RETENTION:-7d}
+      - -httpListenAddr=:9428
+    ports:
+      - "${VICTORIALOGS_PUBLISH_PORT:-9428}:9428"
+    volumes:
+      - ${VICTORIALOGS_DATA_PATH:-victorialogs-data}:/vlogs
+
+volumes:
+  victorialogs-data:

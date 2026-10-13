@@ -1,0 +1,26 @@
+[Unit]
+Description=LogPilot self-hosted log center
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=logpilot
+Group=logpilot
+WorkingDirectory=/opt/logpilot
+ExecStart=/usr/bin/dotnet /opt/logpilot/LogPilot.Web.dll
+Restart=on-failure
+RestartSec=5
+
+# 环境变量（也可放到 EnvironmentFile=/etc/logpilot.env）
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://0.0.0.0:8080
+Environment=Storage__Sqlite__DataSource=/opt/logpilot/data/logpilot.db
+Environment=Storage__VictoriaLogs__BaseUrl=http://127.0.0.1:9428
+
+# 安全加固（按需调整）
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

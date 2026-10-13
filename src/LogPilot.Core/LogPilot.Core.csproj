@@ -1,0 +1,6 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>LogPilot.Core</RootNamespace>
+    <Description>LogPilot domain models and abstractions</Description>
+  </PropertyGroup>
+</Project>

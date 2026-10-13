@@ -1,0 +1,76 @@
+@{
+  Layout = null;
+  ViewData["Title"] = "首次初始化";
+}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>首次初始化 · LogPilot</title>
+  <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+  <style>
+    .auth-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .auth-card { width: min(440px, 100%); }
+    .auth-card h1 { margin: 0 0 8px; font-size: 24px; }
+    .formrow { margin-bottom: 14px; }
+    .formrow label { display: block; margin-bottom: 6px; color: #56657a; font-size: 13px; }
+    .error { color: #e44d5d; font-size: 13px; min-height: 18px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="card auth-card">
+      <h1>创建管理员</h1>
+      <p class="muted">首次启动需设置系统管理员。完成后请妥善保管账号密码。</p>
+      <div class="formrow">
+        <label for="username">管理员账号</label>
+        <input id="username" class="field" maxlength="64" autocomplete="username" />
+      </div>
+      <div class="formrow">
+        <label for="displayName">显示名称（可选）</label>
+        <input id="displayName" class="field" maxlength="100" />
+      </div>
+      <div class="formrow">
+        <label for="password">密码（至少 8 位）</label>
+        <input id="password" type="password" class="field" maxlength="128" autocomplete="new-password" />
+      </div>
+      <div class="formrow">
+        <label for="confirm">确认密码</label>
+        <input id="confirm" type="password" class="field" maxlength="128" autocomplete="new-password" />
+      </div>
+      <button id="submit" class="btn primary" style="width:100%">创建并进入系统</button>
+      <div id="error" class="error"></div>
+    </div>
+  </div>
+  <script src="~/js/common/api-client.js" asp-append-version="true"></script>
+  <script>
+    (() => {
+      const errorEl = document.getElementById('error');
+      const btn = document.getElementById('submit');
+      btn.addEventListener('click', async () => {
+        errorEl.textContent = '';
+        const username = document.getElementById('username').value.trim();
+        const displayName = document.getElementById('displayName').value.trim();
+        const password = document.getElementById('password').value;
+        const confirm = document.getElementById('confirm').value;
+        if (password !== confirm) {
+          errorEl.textContent = '两次输入的密码不一致';
+          return;
+        }
+        btn.disabled = true;
+        try {
+          await LogPilotApi.api('/api/v1/setup/admin', {
+            method: 'POST',
+            body: { username, password, displayName: displayName || null }
+          });
+          location.href = '/';
+        } catch (e) {
+          errorEl.textContent = e.message || '初始化失败';
+          btn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

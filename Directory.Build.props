@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <Authors>LogPilot Contributors</Authors>
+    <Product>LogPilot</Product>
+    <Company>LogPilot</Company>
+    <Copyright>Copyright (c) LogPilot Contributors</Copyright>
+    <NeutralLanguage>zh-Hans</NeutralLanguage>
+  </PropertyGroup>
+</Project>

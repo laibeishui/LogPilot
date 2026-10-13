@@ -1,0 +1,145 @@
+@{
+  ViewData["Title"] = "项目管理";
+}
+<div class="headline">
+  <div>
+    <h1>项目管理</h1>
+    <p>创建项目、停用项目。密钥请到接入中心管理。</p>
+  </div>
+  <div>
+    <button class="btn primary" id="btnNew" type="button">+ 新建项目</button>
+  </div>
+</div>
+
+<div id="notice" class="notice" style="display:none"></div>
+
+<div class="card" id="createPanel" style="display:none;margin-bottom:18px">
+  <div class="rows">
+    <div>
+      <label class="muted" for="name">项目名称</label>
+      <input id="name" class="field" maxlength="100" />
+    </div>
+    <div>
+      <label class="muted" for="code">项目编码</label>
+      <input id="code" class="field" maxlength="64" placeholder="例如 hilink" />
+    </div>
+    <div>
+      <label class="muted" for="description">说明</label>
+      <input id="description" class="field" maxlength="500" />
+    </div>
+    <div>
+      <button class="btn primary" id="btnCreate" type="button">创建</button>
+      <button class="btn" id="btnCancel" type="button">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>编码</th>
+          <th>说明</th>
+          <th>状态</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="5" class="muted">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+@section Scripts {
+<script>
+  (() => {
+    const tbody = document.getElementById('tbody');
+    const notice = document.getElementById('notice');
+    const createPanel = document.getElementById('createPanel');
+
+    function showNotice(text, isError) {
+      notice.style.display = 'block';
+      notice.textContent = text;
+      notice.style.background = isError ? '#ffebee' : '#fff8e9';
+      notice.style.color = isError ? '#d74652' : '#8a6420';
+      notice.style.borderColor = isError ? '#ffcdd2' : '#ffe8ba';
+    }
+
+    async function load() {
+      try {
+        const items = await LogPilotApi.api('/api/v1/projects');
+        if (!items.length) {
+          tbody.innerHTML = '<tr><td colspan="5" class="muted">暂无项目，点击右上角新建。</td></tr>';
+          return;
+        }
+        tbody.innerHTML = items.map(p => `
+          <tr>
+            <td><strong>${escapeHtml(p.name)}</strong></td>
+            <td><code>${escapeHtml(p.code)}</code></td>
+            <td>${escapeHtml(p.description || '')}</td>
+            <td><span class="pill">${p.status === 'enabled' ? '启用' : '停用'}</span></td>
+            <td>
+              <a class="btn" href="/integrations?projectId=${p.id}">接入</a>
+              ${p.status === 'enabled'
+                ? `<button class="btn" data-disable="${p.id}" type="button">停用</button>`
+                : `<button class="btn" data-enable="${p.id}" type="button">启用</button>`}
+            </td>
+          </tr>`).join('');
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(e.message)}</td></tr>`;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    document.getElementById('btnNew').addEventListener('click', () => {
+      createPanel.style.display = 'block';
+    });
+    document.getElementById('btnCancel').addEventListener('click', () => {
+      createPanel.style.display = 'none';
+    });
+    document.getElementById('btnCreate').addEventListener('click', async () => {
+      try {
+        await LogPilotApi.api('/api/v1/projects', {
+          method: 'POST',
+          body: {
+            name: document.getElementById('name').value.trim(),
+            code: document.getElementById('code').value.trim(),
+            description: document.getElementById('description').value.trim()
+          }
+        });
+        createPanel.style.display = 'none';
+        showNotice('项目已创建');
+        await load();
+      } catch (e) {
+        showNotice(e.message || '创建失败', true);
+      }
+    });
+
+    tbody.addEventListener('click', async (e) => {
+      const disableId = e.target.getAttribute('data-disable');
+      const enableId = e.target.getAttribute('data-enable');
+      const id = disableId || enableId;
+      if (!id) return;
+      if (disableId && !confirm('停用后该项目 Token 将无法写入，确认？')) return;
+      try {
+        await LogPilotApi.api('/api/v1/projects/' + id, {
+          method: 'PATCH',
+          body: { status: disableId ? 0 : 1 }
+        });
+        showNotice(disableId ? '项目已停用' : '项目已启用');
+        await load();
+      } catch (err) {
+        showNotice(err.message || '操作失败', true);
+      }
+    });
+
+    load();
+  })();
+</script>
+}

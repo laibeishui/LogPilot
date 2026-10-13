@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>LogPilot.Infrastructure</RootNamespace>
+    <Description>LogPilot infrastructure adapters (SQLite, VictoriaLogs)</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LogPilot.Core\LogPilot.Core.csproj" />
+    <ProjectReference Include="..\LogPilot.Application\LogPilot.Application.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Identity.Core" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Sqlite\Migrations\*.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Otlp\Protos\opentelemetry\proto\common\v1\common.proto" GrpcServices="None" ProtoRoot="Otlp\Protos" />
+    <Protobuf Include="Otlp\Protos\opentelemetry\proto\resource\v1\resource.proto" GrpcServices="None" ProtoRoot="Otlp\Protos" />
+    <Protobuf Include="Otlp\Protos\opentelemetry\proto\logs\v1\logs.proto" GrpcServices="None" ProtoRoot="Otlp\Protos" />
+    <Protobuf Include="Otlp\Protos\opentelemetry\proto\collector\logs\v1\logs_service.proto" GrpcServices="None" ProtoRoot="Otlp\Protos" />
+  </ItemGroup>
+</Project>

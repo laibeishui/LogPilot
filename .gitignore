@@ -1,0 +1,50 @@
+## .NET
+bin/
+obj/
+[Bb]uild/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.userosscache
+*.suo
+*.sln.docstates
+.vs/
+*.rsuser
+project.lock.json
+artifacts/
+
+## NuGet
+*.nupkg
+**/packages/*
+!**/packages/build/
+
+## IDE
+.idea/
+*.swp
+*~
+
+## OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+## Local data & secrets
+.env
+deploy/.env
+*.db
+*.db-shm
+*.db-wal
+/data/
+/app/data/
+src/LogPilot.Web/App_Data/
+artifacts/
+
+## Test / coverage
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+## Node (if frontend build is added later)
+node_modules/
+dist/

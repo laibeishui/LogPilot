@@ -1,0 +1,15 @@
+{
+  "logs": [
+    {
+      "timestamp": "2026-10-13T07:30:00Z",
+      "serviceName": "demo-api",
+      "environment": "dev",
+      "level": "Error",
+      "message": "hello LogPilot from curl-json",
+      "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+      "attributes": {
+        "module": "SmokeTest"
+      }
+    }
+  ]
+}
