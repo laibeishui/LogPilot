@@ -21,6 +21,40 @@ public interface ILogSearcher
         DateTimeOffset startTime,
         DateTimeOffset endTime,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 统计匹配条件的日志数量（用于告警评估）。
+    /// </summary>
+    Task<long> CountAsync(
+        long projectId,
+        DateTimeOffset startTime,
+        DateTimeOffset endTime,
+        string? serviceName,
+        IReadOnlyList<string> levels,
+        string? keyword,
+        string? exceptionType,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 按时间桶聚合日志数量（用于趋势图）。
+    /// </summary>
+    Task<IReadOnlyList<TrendPoint>> TrendAsync(
+        long projectId,
+        DateTimeOffset startTime,
+        DateTimeOffset endTime,
+        string interval,
+        bool errorsOnly,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// 单时间桶的聚合结果。
+/// </summary>
+public sealed class TrendPoint
+{
+    public required DateTimeOffset Bucket { get; init; }
+
+    public long Count { get; init; }
 }
 
 /// <summary>

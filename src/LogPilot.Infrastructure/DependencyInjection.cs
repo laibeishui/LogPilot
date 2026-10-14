@@ -1,8 +1,10 @@
 using LogPilot.Application.Ingestion;
 using LogPilot.Core.Abstractions;
 using LogPilot.Infrastructure.Authentication;
+using LogPilot.Infrastructure.Notifications;
 using LogPilot.Infrastructure.Options;
 using LogPilot.Infrastructure.Otlp;
+using LogPilot.Infrastructure.Security;
 using LogPilot.Infrastructure.Sqlite;
 using LogPilot.Infrastructure.Sqlite.Repositories;
 using LogPilot.Infrastructure.VictoriaLogs;
@@ -31,6 +33,19 @@ public static class DependencyInjection
         services.AddScoped<IUserRepository, SqliteUserRepository>();
         services.AddScoped<IProjectRepository, SqliteProjectRepository>();
         services.AddScoped<IApiKeyRepository, SqliteApiKeyRepository>();
+        services.AddScoped<IAlertChannelRepository, SqliteAlertChannelRepository>();
+        services.AddScoped<IAlertRuleRepository, SqliteAlertRuleRepository>();
+        services.AddScoped<IAlertEventRepository, SqliteAlertEventRepository>();
+
+        // 渠道配置加密
+        var alertingKey = configuration["Alerting:ConfigKey"];
+        services.AddSingleton(new ChannelConfigProtector(alertingKey));
+
+        // 通知渠道
+        services.AddSingleton<INotifier, DingTalkNotifier>();
+        services.AddSingleton<INotifier, WeComNotifier>();
+        services.AddSingleton<INotifier, EmailNotifier>();
+        services.AddSingleton<INotifier, WebhookNotifier>();
 
         services.AddSingleton<IHealthProbe, VictoriaLogsHealthProbe>();
         services.AddSingleton<ILogWriter, VictoriaLogsWriter>();

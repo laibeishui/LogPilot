@@ -155,5 +155,25 @@ public sealed class LogSearchApiTests
             DateTimeOffset endTime,
             CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<string>>(["demo-api"]);
+
+        public Task<long> CountAsync(
+            long projectId,
+            DateTimeOffset startTime,
+            DateTimeOffset endTime,
+            string? serviceName,
+            IReadOnlyList<string> levels,
+            string? keyword,
+            string? exceptionType,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult(0L);
+
+        public Task<IReadOnlyList<TrendPoint>> TrendAsync(
+            long projectId,
+            DateTimeOffset startTime,
+            DateTimeOffset endTime,
+            string interval,
+            bool errorsOnly,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<TrendPoint>>(Array.Empty<TrendPoint>());
     }
 }

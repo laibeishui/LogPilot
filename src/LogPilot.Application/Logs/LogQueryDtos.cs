@@ -88,3 +88,40 @@ public sealed class LogFiltersDto
 
     public required IReadOnlyList<string> Levels { get; init; }
 }
+
+/// <summary>
+/// 单项目日志概览：近 N 分钟内的日志总量、错误量、服务数。
+/// </summary>
+public sealed class StatsOverviewDto
+{
+    public long ProjectId { get; set; }
+
+    public long TotalLogs { get; set; }
+
+    public long ErrorLogs { get; set; }
+
+    public int ServiceCount { get; set; }
+
+    public DateTimeOffset StartTime { get; set; }
+
+    public DateTimeOffset EndTime { get; set; }
+}
+
+/// <summary>
+/// 单项目日志趋势。
+/// </summary>
+public sealed class StatsTrendDto
+{
+    public required string Interval { get; set; }
+
+    public required IReadOnlyList<TrendPointDto> Points { get; set; }
+}
+
+public sealed class TrendPointDto
+{
+    public required DateTimeOffset Time { get; set; }
+
+    public long Count { get; set; }
+
+    public long Errors { get; set; }
+}

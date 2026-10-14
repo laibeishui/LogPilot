@@ -165,9 +165,24 @@ COMMIT;
 
 建议密钥格式：`lp_` + 32 字节以上密码学安全随机字节编码。服务端只持久化密钥哈希，查询验证时结合固定长度比较和明确的密钥定位策略；`key_prefix` 仅用于页面识别，不能作为凭证。应用日志接入密钥只允许 `ingest` 操作，用户登录与管理 API 使用独立认证会话。创建、撤销和过期检测必须以数据库中的项目状态为准。
 
-### 4.3 后续版本的表（不要在 V0.1 过早创建）
+### 4.3 告警相关表（V0.2）
 
-`lp_alert_rule`、`lp_alert_event`、`lp_notification_channel`、`lp_audit_log`、`lp_error_group`：对应 V0.2/V0.3 的统计、告警、审计和异常归并。各表结构在相应功能进入开发前再冻结，避免维护空表和无效字段。
+V0.2 新增三张告警表（迁移 `0002_alerting.sql`）：
+
+| 表 | 用途 |
+|---|---|
+| `lp_alert_channel` | 通知渠道（钉钉 / 企微 / 邮件 / Webhook），配置 JSON AES 加密存储 |
+| `lp_alert_rule` | 告警规则（匹配范围、计数阈值、窗口、冷却、渠道关联） |
+| `lp_alert_event` | 告警事件实例（状态、首次/最近触发、确认/恢复、指纹去重） |
+
+关键字段：
+- `lp_alert_channel`：`id`、`project_id`、`name`、`type`、`config_encrypted`、`enabled`、`created_at`、`updated_at`
+- `lp_alert_rule`：`id`、`project_id`、`name`、`service_name`、`levels`(JSON)、`keyword`、`condition_type`、`threshold`、`window_minutes`、`cooldown_minutes`、`repeat_minutes`、`channel_ids`(JSON)、`severity`、`notify_recovery`、`enabled`
+- `lp_alert_event`：`id`、`project_id`、`rule_id`、`fingerprint`、`status`、`severity`、`summary`、`first_fired_at`、`last_fired_at`、`acknowledged_at`、`resolved_at`、`last_notified_at`、`notified_count`
+
+### 4.4 后续版本的表（不要过早创建）
+
+`lp_audit_log`、`lp_error_group`：对应 V0.3 的审计和异常归并。各表结构在相应功能进入开发前再冻结，避免维护空表和无效字段。
 
 ## 5. VictoriaLogs 统一日志字段设计
 

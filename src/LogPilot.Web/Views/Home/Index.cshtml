@@ -1,38 +1,281 @@
-﻿@{
+@{
   ViewData["Title"] = "总览";
 }
 <div class="headline">
   <div>
     <h1>运行总览</h1>
-    <p>轻量自托管日志中心。写入与检索主路径已打通。</p>
+    <p>集中管理应用日志，快速定位问题。</p>
   </div>
-  <div>
-    <a class="btn primary" asp-controller="Logs" asp-action="Index">查询日志 →</a>
+  <div class="rows" style="align-items:center">
+    <label class="muted" for="projectId">项目</label>
+    <select id="projectId" class="field" style="min-width:200px"></select>
   </div>
 </div>
 
+<div id="notice" class="notice" style="display:none"></div>
+
+<!-- 健康状态 -->
+<div class="card" style="margin-bottom:16px;padding:14px 18px">
+  <div class="rows" id="healthRows">
+    <div class="line"><span>LogPilot Server</span><span class="muted">检测中…</span></div>
+    <div class="line"><span>VictoriaLogs</span><span class="muted">检测中…</span></div>
+    <div class="line"><span>SQLite</span><span class="muted">检测中…</span></div>
+    <div class="line"><span>告警评估引擎</span><span class="muted">检测中…</span></div>
+  </div>
+</div>
+
+<!-- KPI -->
 <div class="kpis">
   <div class="card kpi">
-    <div class="muted">认证</div>
-    <div class="val green">已登录</div>
-    <div class="muted">Cookie 会话 + CSRF</div>
+    <div class="muted">日志总数</div>
+    <div class="val" id="kpiTotal">—</div>
+    <div class="muted" id="kpiTotalSub">选择项目</div>
   </div>
   <div class="card kpi">
-    <div class="muted">元数据</div>
-    <div class="val">SQLite</div>
-    <div class="muted">项目 / 成员 / API Key</div>
+    <div class="muted">错误日志</div>
+    <div class="val red" id="kpiErrors">—</div>
+    <div class="muted" id="kpiErrorsSub">ERROR / FATAL</div>
   </div>
   <div class="card kpi">
-    <div class="muted">下一步</div>
-    <div class="val">M5</div>
-    <div class="muted">Compose / 示例 / README</div>
+    <div class="muted">接入服务</div>
+    <div class="val" id="kpiServices">—</div>
+    <div class="muted" id="kpiServicesSub">当前时间窗</div>
   </div>
 </div>
 
-<div class="card" style="margin-top:18px">
-  <div class="rows">
-    <div class="line"><span>快捷入口</span><a asp-controller="Integrations" asp-action="Index">接入中心</a></div>
-    <div class="line"><span>健康探针</span><a href="/health/ready">/health/ready</a></div>
-    <div class="line"><span>当前用户</span><a href="/api/v1/auth/me">/api/v1/auth/me</a></div>
+<!-- 趋势 + 快捷 -->
+<div class="two" style="margin-top:18px">
+  <div class="card pad">
+    <div class="sectionhead">
+      <h3 style="margin:0">日志趋势</h3>
+      <span class="muted small">最近 12 个时段</span>
+    </div>
+    <div class="barchart" id="barchart">
+      <div class="muted" style="padding:40px 0;text-align:center;width:100%">选择项目后显示</div>
+    </div>
+    <div class="legend" style="margin-top:10px">
+      <span><span class="dot" style="background:#7895ff"></span>全部日志</span>
+      <span><span class="dot" style="background:#f27988"></span>错误日志</span>
+    </div>
+  </div>
+  <div class="card pad">
+    <div class="sectionhead">
+      <h3 style="margin:0">快捷操作</h3>
+    </div>
+    <div class="rows">
+      <a class="btn" asp-controller="Logs" asp-action="Index">查询日志 →</a>
+      <a class="btn" asp-controller="Projects" asp-action="Index">项目管理 →</a>
+      <a class="btn" asp-controller="Integrations" asp-action="Index">接入中心 →</a>
+      <a class="btn" asp-controller="Alerts" asp-action="Index">告警中心 →</a>
+      <hr style="border:0;border-top:1px solid var(--line);width:100%;margin:4px 0">
+      <div class="line"><span class="muted">健康端点</span><a href="/health/ready">/health/ready</a></div>
+    </div>
   </div>
 </div>
+
+<!-- 最近错误 -->
+<div class="card pad" style="margin-top:18px">
+  <div class="sectionhead">
+    <h3 style="margin:0">最近错误</h3>
+    <a class="btn" asp-controller="Logs" asp-action="Index" id="viewAllErrors">查看全部</a>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>级别</th>
+          <th>服务</th>
+          <th>消息</th>
+        </tr>
+      </thead>
+      <tbody id="errorsBody">
+        <tr><td colspan="4" class="muted">选择项目后加载</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>
+  .two { display:grid; grid-template-columns:1.5fr 1fr; gap:18px; }
+  .sectionhead { display:flex; align-items:center; justify-content:space-between; margin-bottom:15px; gap:12px; }
+  .sectionhead h3 { margin:0; font-size:16px; }
+  .barchart { height:210px; display:flex; align-items:end; gap:6px; border-bottom:1px solid #e6eaf0; padding:10px 4px 0; background:linear-gradient(#fff,#f9fbff); }
+  .bar { flex:1; background:linear-gradient(180deg,#7895ff,#c1ceff); border-radius:5px 5px 0 0; min-width:6px; position:relative; }
+  .bar.err { background:linear-gradient(180deg,#f27988,#ffc8cf); }
+  .legend { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  .legend span { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:5px; }
+  .dot { width:10px; height:10px; border-radius:2px; display:inline-block; }
+  .pad { padding:18px 20px; }
+  .small { font-size:12px; }
+  @@media(max-width:1000px){ .two{grid-template-columns:1fr} .kpis{grid-template-columns:repeat(2,1fr)} }
+  @@media(max-width:620px){ .kpis{grid-template-columns:1fr} }
+</style>
+
+@section Scripts {
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const projectSelect = $('projectId');
+  const notice = $('notice');
+  let currentProjectId = null;
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function showNotice(text, isError) {
+    notice.style.display = 'block';
+    notice.textContent = text;
+    notice.style.background = isError ? '#ffebee' : '#fff8e9';
+    notice.style.color = isError ? '#d74652' : '#8a6420';
+    notice.style.borderColor = isError ? '#ffcdd2' : '#ffe8ba';
+  }
+
+  function levelClass(level) {
+    const v = String(level || '').toLowerCase();
+    if (v.includes('error') || v.includes('fatal')) return 'error';
+    if (v.includes('warn')) return 'warn';
+    if (v.includes('debug') || v.includes('trace')) return 'debug';
+    return 'info';
+  }
+
+  // —— 健康状态 ——
+  async function loadHealth() {
+    try {
+      const report = await LogPilotApi.api('/health/ready');
+      const map = {
+        'LogPilot': report.logPilot,
+        'VictoriaLogs': report.victoriaLogs,
+        'SQLite': report.sqlite,
+        '告警评估引擎': report.alertEvaluator
+      };
+      const rows = $('healthRows');
+      rows.innerHTML = Object.entries(map).map(([name, comp]) => {
+        if (!comp) return `<div class="line"><span>${name}</span><span class="muted">未启用</span></div>`;
+        const ok = comp.status === 0 || String(comp.status).toLowerCase() === 'healthy';
+        const label = ok ? '● 可用' : ('● ' + (comp.statusText || comp.status));
+        return `<div class="line"><span>${name}</span><span class="${ok ? 'green' : 'red'}">${label}${comp.detail ? ' · ' + escapeHtml(comp.detail) : ''}</span></div>`;
+      }).join('');
+    } catch (e) {
+      $('healthRows').innerHTML = `<div class="line"><span>健康检查</span><span class="red">失败：${escapeHtml(e.message)}</span></div>`;
+    }
+  }
+
+  // —— 项目列表 ——
+  async function loadProjects() {
+    try {
+      const items = await LogPilotApi.api('/api/v1/projects');
+      projectSelect.innerHTML = items.map(p =>
+        `<option value="${p.id}">${escapeHtml(p.name)} (${escapeHtml(p.code)})</option>`
+      ).join('') || '<option value="">暂无项目</option>';
+      if (projectSelect.value) {
+        currentProjectId = projectSelect.value;
+        loadAll();
+      }
+    } catch (e) {
+      showNotice('加载项目失败: ' + e.message, true);
+    }
+  }
+
+  // —— 概览 KPI ——
+  async function loadOverview() {
+    if (!currentProjectId) return;
+    const qs = new URLSearchParams({ projectId: currentProjectId });
+    try {
+      const o = await LogPilotApi.api('/api/v1/stats/overview?' + qs.toString());
+      $('kpiTotal').textContent = o.totalLogs.toLocaleString();
+      $('kpiTotalSub').textContent = `${fmtTime(o.startTime)} ~ ${fmtTime(o.endTime)}`;
+      $('kpiErrors').textContent = o.errorLogs.toLocaleString();
+      $('kpiServices').textContent = o.serviceCount;
+    } catch (e) {
+      $('kpiTotal').textContent = '—';
+      $('kpiErrors').textContent = '—';
+      $('kpiServices').textContent = '—';
+      console.warn(e);
+    }
+  }
+
+  // —— 趋势图 ——
+  async function loadTrend() {
+    if (!currentProjectId) return;
+    const qs = new URLSearchParams({ projectId: currentProjectId, interval: '5m' });
+    try {
+      const t = await LogPilotApi.api('/api/v1/stats/trend?' + qs.toString());
+      const points = t.points || [];
+      const last12 = points.slice(-12);
+      if (last12.length === 0) {
+        $('barchart').innerHTML = '<div class="muted" style="padding:40px 0;text-align:center;width:100%">暂无数据</div>';
+        return;
+      }
+      const maxCount = Math.max(1, ...last12.map(p => p.count));
+      const chart = $('barchart');
+      chart.innerHTML = last12.map(p => {
+        const h = Math.max(2, (p.count / maxCount) * 100);
+        const errH = p.errors > 0 ? Math.max(2, (p.errors / maxCount) * 100) : 0;
+        const title = `${fmtTime(p.time)}\n全部: ${p.count}\n错误: ${p.errors}`;
+        return `<div class="bar" title="${title.replace(/"/g, '&quot;')}" style="height:${h}%">
+          ${errH > 0 ? `<div class="bar err" style="height:${(errH/h)*100}%;position:absolute;bottom:0;left:0;right:0;border-radius:5px 5px 0 0"></div>` : ''}
+        </div>`;
+      }).join('');
+    } catch (e) {
+      $('barchart').innerHTML = `<div class="muted" style="padding:40px 0;text-align:center;width:100%">加载失败</div>`;
+      console.warn(e);
+    }
+  }
+
+  // —— 最近错误 ——
+  async function loadRecentErrors() {
+    if (!currentProjectId) return;
+    const end = new Date();
+    const start = new Date(end.getTime() - 15 * 60 * 1000);
+    try {
+      const result = await LogPilotApi.api('/api/v1/logs/search', {
+        method: 'POST',
+        body: {
+          projectId: Number(currentProjectId),
+          startTime: start.toISOString(),
+          endTime: end.toISOString(),
+          levels: ['ERROR', 'FATAL'],
+          pageSize: 10
+        }
+      });
+      const items = result.items || [];
+      $('errorsBody').innerHTML = items.map(x => `
+        <tr class="clickable" data-id="${escapeHtml(x.id)}" data-ts="${escapeHtml(x.timestamp)}">
+          <td style="white-space:nowrap">${escapeHtml(new Date(x.timestamp).toLocaleString())}</td>
+          <td><span class="tag ${levelClass(x.level)}">${escapeHtml(x.level)}</span></td>
+          <td>${escapeHtml(x.serviceName)}</td>
+          <td class="msg" title="${escapeHtml(x.message)}">${escapeHtml(x.message)}</td>
+        </tr>`).join('') || '<tr><td colspan="4" class="muted">近 15 分钟无错误日志</td></tr>';
+    } catch (e) {
+      $('errorsBody').innerHTML = `<tr><td colspan="4" class="muted">加载失败：${escapeHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  function fmtTime(iso) {
+    try { return new Date(iso).toLocaleTimeString(); } catch { return iso; }
+  }
+
+  async function loadAll() {
+    await Promise.all([loadOverview(), loadTrend(), loadRecentErrors()]);
+  }
+
+  projectSelect.addEventListener('change', () => {
+    currentProjectId = projectSelect.value;
+    if (currentProjectId) loadAll();
+  });
+
+  loadHealth();
+  loadProjects();
+
+  // 点击错误行跳转到日志详情
+  $('errorsBody').addEventListener('click', (e) => {
+    const tr = e.target.closest('tr[data-id]');
+    if (tr) {
+      location.href = `/logs?projectId=${currentProjectId}&auto=1`;
+    }
+  });
+})();
+</script>
+}

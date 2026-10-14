@@ -500,6 +500,94 @@ graph TD
 - VictoriaLogs 查询：https://docs.victoriametrics.com/victorialogs/querying/
 - VictoriaLogs 项目：https://github.com/VictoriaMetrics/VictoriaLogs
 
+## 17. 告警 API（V0.2）
+
+告警功能包含三部分：通知渠道、告警规则、告警事件。所有接口需登录态 + CSRF Header。
+
+### 17.1 通知渠道
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/alerts/projects/{projectId}/channels` | 渠道列表 |
+| POST | `/api/v1/alerts/projects/{projectId}/channels` | 创建渠道 |
+| PATCH | `/api/v1/alerts/projects/{projectId}/channels/{channelId}` | 更新渠道 |
+| DELETE | `/api/v1/alerts/projects/{projectId}/channels/{channelId}` | 删除渠道 |
+| POST | `/api/v1/alerts/projects/{projectId}/channels/{channelId}/test` | 测试发送 |
+
+**支持的渠道类型**：`DingTalk`、`WeCom`、`Email`、`Webhook`。
+
+**创建渠道请求体**：
+```json
+{
+  "name": "线上告警群",
+  "type": "DingTalk",
+  "configJson": "{\"webhookUrl\":\"https://oapi.dingtalk.com/robot/send?access_token=xxx\",\"secret\":\"可选\"}",
+  "enabled": true
+}
+```
+
+各渠道 `configJson` 结构：
+- **DingTalk**: `{"webhookUrl":"...","secret":"可选加签密钥"}`
+- **WeCom**: `{"webhookUrl":"..."}`
+- **Email**: `{"smtpHost":"smtp.xxx.com","smtpPort":587,"username":"...","password":"...","from":"...","to":["a@b.com"],"enableSsl":true}`
+- **Webhook**: `{"url":"...","headers":{"Authorization":"Bearer xxx"}}`
+
+> 渠道配置（含密钥）在服务端 AES 加密存储，列表接口只返回脱敏摘要。
+
+### 17.2 告警规则
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/alerts/projects/{projectId}/rules` | 规则列表 |
+| POST | `/api/v1/alerts/projects/{projectId}/rules` | 创建规则 |
+| GET | `/api/v1/alerts/projects/{projectId}/rules/{ruleId}` | 规则详情 |
+| PATCH | `/api/v1/alerts/projects/{projectId}/rules/{ruleId}` | 更新规则 |
+| DELETE | `/api/v1/alerts/projects/{projectId}/rules/{ruleId}` | 删除规则 |
+
+**创建规则请求体**：
+```json
+{
+  "name": "生产错误过多",
+  "serviceName": "api",
+  "levels": ["ERROR", "FATAL"],
+  "keyword": null,
+  "conditionType": "Count",
+  "threshold": 10,
+  "windowMinutes": 5,
+  "cooldownMinutes": 5,
+  "repeatMinutes": null,
+  "channelIds": [1, 2],
+  "severity": "P1",
+  "notifyRecovery": true,
+  "enabled": true
+}
+```
+
+**字段说明**：
+- `conditionType`：V0.2 仅支持 `Count`（X 分钟内匹配日志数 ≥ 阈值）
+- `windowMinutes`：评估窗口（1~1440 分钟）
+- `cooldownMinutes`：触发后冷却时间，期间不重复通知
+- `repeatMinutes`：持续未恢复时的重发间隔；`null` 表示不重发
+- `channelIds`：通知渠道 ID 列表（必须属于同一项目）
+
+### 17.3 告警事件
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/v1/alerts/projects/{projectId}/events?status=&limit=&cursor=` | 事件列表（支持状态过滤、游标分页） |
+| POST | `/api/v1/alerts/projects/{projectId}/events/{eventId}/acknowledge` | 确认告警 |
+| POST | `/api/v1/alerts/projects/{projectId}/events/{eventId}/resolve` | 标记恢复 |
+
+**事件状态**：`firing`（触发中）、`acknowledged`（已确认）、`resolved`（已恢复）。
+
+### 17.4 评估引擎
+
+- 后台 `BackgroundService` 每 30 秒轮询所有启用规则，查询 VictoriaLogs 统计匹配日志数
+- 命中阈值 → 创建/更新 firing 事件 → 通过渠道发送通知
+- 条件不再满足 → 标记 resolved → 发送恢复通知（若 `notifyRecovery=true`）
+- 冷却与重发：同事件在 `cooldownMinutes` 内不重发；配置了 `repeatMinutes` 则按间隔重发
+- 健康检查：`/health/ready` 返回评估引擎最近运行状态（超过 2 分钟无成功运行标为 Unhealthy）
+
 ---
 
 **下一份文档**：`04_LogPilot_项目结构与开发规范.md`。该文档将明确 .NET 工程目录、MVC 与 API Controller 组织方式、Dapper 数据访问、Vue 页面组织、依赖注入、测试及提交规范。

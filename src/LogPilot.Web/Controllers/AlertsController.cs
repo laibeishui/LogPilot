@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace LogPilot.Web.Controllers;
 
 /// <summary>
-/// 告警中心占位页（V0.3，不可执行伪操作）。
+/// 告警中心：告警事件、规则、通知渠道管理。
 /// </summary>
 [Route("alerts")]
 public sealed class AlertsController : Controller

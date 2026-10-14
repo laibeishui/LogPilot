@@ -27,4 +27,21 @@ public interface ILogQueryService
         DateTimeOffset? startTime,
         DateTimeOffset? endTime,
         CancellationToken cancellationToken = default);
+
+    Task<StatsOverviewDto> GetOverviewAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        DateTimeOffset? startTime,
+        DateTimeOffset? endTime,
+        CancellationToken cancellationToken = default);
+
+    Task<StatsTrendDto> GetTrendAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        DateTimeOffset? startTime,
+        DateTimeOffset? endTime,
+        string? interval,
+        CancellationToken cancellationToken = default);
 }

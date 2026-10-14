@@ -109,6 +109,184 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
         }
     }
 
+    public async Task<long> CountAsync(
+        long projectId,
+        DateTimeOffset startTime,
+        DateTimeOffset endTime,
+        string? serviceName,
+        IReadOnlyList<string> levels,
+        string? keyword,
+        string? exceptionType,
+        CancellationToken cancellationToken = default)
+    {
+        var logsQl = LogsQlBuilder.BuildCount(projectId, startTime, endTime, serviceName, levels, keyword, exceptionType);
+        try
+        {
+            var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
+            if (rows.Count == 0)
+            {
+                return 0;
+            }
+
+            // stats count() 返回 {"count()": N} 或 {"count(*)": N} 或 {"count": N}
+            var row = rows[0];
+            if (row.TryGetProperty("count(*)", out var countStarProp))
+            {
+                return ParseCount(countStarProp);
+            }
+
+            if (row.TryGetProperty("count()", out var countProp))
+            {
+                return ParseCount(countProp);
+            }
+
+            if (row.TryGetProperty("count", out countProp))
+            {
+                return ParseCount(countProp);
+            }
+
+            // 兜底：取第一个数字或数字字符串属性
+            foreach (var prop in row.EnumerateObject())
+            {
+                if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt64(out var v))
+                {
+                    return v;
+                }
+
+                if (prop.Value.ValueKind == JsonValueKind.String && long.TryParse(prop.Value.GetString(), out var sv))
+                {
+                    return sv;
+                }
+            }
+
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to count logs for project {ProjectId}", projectId);
+            return 0;
+        }
+    }
+
+    public async Task<IReadOnlyList<TrendPoint>> TrendAsync(
+        long projectId,
+        DateTimeOffset startTime,
+        DateTimeOffset endTime,
+        string interval,
+        bool errorsOnly,
+        CancellationToken cancellationToken = default)
+    {
+        var logsQl = LogsQlBuilder.BuildTrend(projectId, startTime, endTime, interval, errorsOnly);
+        try
+        {
+            var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
+            var points = new List<TrendPoint>(rows.Count);
+            foreach (var row in rows)
+            {
+                // VictoriaLogs 返回 _time[5m] 或 _time[1m] 等字段名
+                var bucketField = FindTimeBucketField(row);
+                var count = ExtractCount(row);
+                if (bucketField is null)
+                {
+                    continue;
+                }
+
+                if (DateTimeOffset.TryParse(bucketField, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var bucket))
+                {
+                    points.Add(new TrendPoint
+                    {
+                        Bucket = bucket.ToUniversalTime(),
+                        Count = count
+                    });
+                }
+            }
+
+            return points.OrderBy(p => p.Bucket).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to get trend for project {ProjectId}", projectId);
+            return Array.Empty<TrendPoint>();
+        }
+    }
+
+    private static string? FindTimeBucketField(JsonElement row)
+    {
+        // VictoriaLogs stats by (_time:5m) 返回 "_time" 字段
+        if (row.TryGetProperty("_time", out var timeProp))
+        {
+            return timeProp.ValueKind == JsonValueKind.String
+                ? timeProp.GetString()
+                : timeProp.ToString();
+        }
+
+        // 兜底：取第一个看起来像时间的字符串字段
+        foreach (var prop in row.EnumerateObject())
+        {
+            if (prop.Value.ValueKind == JsonValueKind.String
+                && DateTimeOffset.TryParse(prop.Value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _))
+            {
+                return prop.Value.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    private static long ExtractCount(JsonElement row)
+    {
+        // stats count() / count(*) 返回 count() 或 count(*) 字段（值可能是字符串）
+        if (row.TryGetProperty("count(*)", out var countStarProp))
+        {
+            return ParseCount(countStarProp);
+        }
+
+        if (row.TryGetProperty("count()", out var countProp))
+        {
+            return ParseCount(countProp);
+        }
+
+        if (row.TryGetProperty("count", out countProp))
+        {
+            return ParseCount(countProp);
+        }
+
+        foreach (var prop in row.EnumerateObject())
+        {
+            if (prop.Name == "_time")
+            {
+                continue;
+            }
+
+            if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt64(out var v))
+            {
+                return v;
+            }
+
+            if (prop.Value.ValueKind == JsonValueKind.String && long.TryParse(prop.Value.GetString(), out var sv))
+            {
+                return sv;
+            }
+        }
+
+        return 0;
+    }
+
+    private static long ParseCount(JsonElement prop)
+    {
+        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt64(out var v))
+        {
+            return v;
+        }
+
+        if (prop.ValueKind == JsonValueKind.String && long.TryParse(prop.GetString(), out var sv))
+        {
+            return sv;
+        }
+
+        return 0;
+    }
+
     private static AuthorizedLogQuery ApplyCursor(AuthorizedLogQuery query)
     {
         if (!SearchCursor.TryDecode(query.Cursor, out var cursor))

@@ -26,6 +26,7 @@ services:
       Ingestion__MaxBatchRecords: "${INGEST_MAX_BATCH:-500}"
       Ingestion__MaxBodyBytes: "${INGEST_MAX_BODY_BYTES:-1048576}"
       Query__MaxRangeHours: "${QUERY_MAX_RANGE_HOURS:-24}"
+      Alerting__ConfigKey: "${ALERTING_CONFIG_KEY:-}"
     volumes:
       - ${LOGPILOT_DATA_PATH:-logpilot-data}:/app/data
     depends_on:

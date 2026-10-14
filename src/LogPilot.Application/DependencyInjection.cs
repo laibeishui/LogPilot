@@ -1,3 +1,4 @@
+using LogPilot.Application.Alerting;
 using LogPilot.Application.Health;
 using LogPilot.Application.Identity;
 using LogPilot.Application.Ingestion;
@@ -28,6 +29,14 @@ public static class DependencyInjection
         services.AddScoped<IIngestApiKeyAuthenticator, IngestApiKeyAuthenticator>();
         services.AddScoped<ILogIngestionService, LogIngestionService>();
         services.AddScoped<IJsonLogIngestService, JsonLogIngestService>();
+
+        // 告警
+        services.AddSingleton<INotificationDispatcher, NotificationDispatcher>();
+        services.AddScoped<IAlertChannelService, AlertChannelService>();
+        services.AddScoped<IAlertRuleService, AlertRuleService>();
+        services.AddScoped<IAlertEventService, AlertEventService>();
+        services.AddSingleton<AlertEvaluationService>();
+        services.AddHostedService(sp => sp.GetRequiredService<AlertEvaluationService>());
 
         return services;
     }

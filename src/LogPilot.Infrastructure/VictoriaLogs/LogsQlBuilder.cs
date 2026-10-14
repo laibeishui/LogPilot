@@ -74,8 +74,108 @@ public static class LogsQlBuilder
         AppendTimeRange(sb, start, end);
         sb.Append(' ');
         AppendStreamFilter(sb, projectId, Array.Empty<string>());
-        sb.Append(" | fields service_name | uniq | limit 200");
+        sb.Append(" | fields service_name | uniq by(service_name) | limit 200");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// 构造统计查询：匹配条件的日志数量。
+    /// </summary>
+    public static string BuildCount(
+        long projectId,
+        DateTimeOffset start,
+        DateTimeOffset end,
+        string? serviceName,
+        IReadOnlyList<string> levels,
+        string? keyword,
+        string? exceptionType)
+    {
+        var sb = new StringBuilder();
+        AppendTimeRange(sb, start, end);
+        sb.Append(' ');
+
+        var services = string.IsNullOrWhiteSpace(serviceName)
+            ? Array.Empty<string>()
+            : new[] { serviceName.Trim() };
+        AppendStreamFilter(sb, projectId, services);
+
+        if (levels.Count > 0)
+        {
+            var validLevels = levels
+                .Select(x => x.Trim().ToUpperInvariant())
+                .Where(AllowedLevels.Contains)
+                .Distinct()
+                .ToList();
+
+            if (validLevels.Count == 1)
+            {
+                sb.Append(" level:").Append(validLevels[0]);
+            }
+            else if (validLevels.Count > 1)
+            {
+                sb.Append(" (");
+                sb.Append(string.Join(" OR ", validLevels.Select(l => "level:" + l)));
+                sb.Append(')');
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            sb.Append(' ').Append(Quote(keyword.Trim()));
+        }
+
+        if (!string.IsNullOrWhiteSpace(exceptionType))
+        {
+            sb.Append(" exception_type:").Append(Quote(exceptionType.Trim()));
+        }
+
+        sb.Append(" | stats count()");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// 构造按时间桶聚合的趋势查询。
+    /// interval 示例：1m、5m、15m、1h。
+    /// </summary>
+    public static string BuildTrend(
+        long projectId,
+        DateTimeOffset start,
+        DateTimeOffset end,
+        string interval,
+        bool errorsOnly)
+    {
+        var sb = new StringBuilder();
+        AppendTimeRange(sb, start, end);
+        sb.Append(' ');
+        AppendStreamFilter(sb, projectId, Array.Empty<string>());
+
+        if (errorsOnly)
+        {
+            sb.Append(" (level:ERROR OR level:FATAL)");
+        }
+
+        // 标准化 interval：仅允许数字+单位
+        var clean = NormalizeInterval(interval);
+        // VictoriaLogs LogsQL 时间桶语法：stats by (_time:5m) count()
+        sb.Append(" | stats by (_time:").Append(clean).Append(") count()");
+        return sb.ToString();
+    }
+
+    private static string NormalizeInterval(string interval)
+    {
+        if (string.IsNullOrWhiteSpace(interval))
+        {
+            return "5m";
+        }
+
+        var trimmed = interval.Trim().ToLowerInvariant();
+        // 允许：数字 + (s|m|h|d)
+        if (System.Text.RegularExpressions.Regex.IsMatch(trimmed, @"^\d+[smhd]$"))
+        {
+            return trimmed;
+        }
+
+        return "5m";
     }
 
     private static void AppendTimeRange(StringBuilder sb, DateTimeOffset start, DateTimeOffset end)

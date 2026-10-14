@@ -4,9 +4,680 @@
 <div class="headline">
   <div>
     <h1>告警中心</h1>
-    <p>按日志条件触发通知，计划在 V0.3 实现。</p>
+    <p>配置告警规则，匹配日志条件后通过钉钉/企微/邮件/Webhook 通知。</p>
+  </div>
+  <div class="rows" style="align-items:center">
+    <label class="muted" for="projectId">项目</label>
+    <select id="projectId" class="field" style="min-width:200px"></select>
   </div>
 </div>
-<div class="card">
-  <div class="notice">规划功能：当前版本不提供可保存规则或测试告警等伪操作。</div>
+
+<div id="notice" class="notice" style="display:none"></div>
+
+<div class="alert-tabs">
+  <button class="tab-btn active" data-tab="events" type="button">告警事件</button>
+  <button class="tab-btn" data-tab="rules" type="button">告警规则</button>
+  <button class="tab-btn" data-tab="channels" type="button">通知渠道</button>
 </div>
+
+<!-- 告警事件 -->
+<div class="tab-pane active" id="tab-events">
+  <div class="card" style="margin-bottom:14px">
+    <div class="rows" style="align-items:center;gap:12px">
+      <select id="eventStatus" class="field" style="width:auto">
+        <option value="">全部状态</option>
+        <option value="firing">触发中</option>
+        <option value="acknowledged">已确认</option>
+        <option value="resolved">已恢复</option>
+      </select>
+      <button class="btn" id="btnRefreshEvents" type="button">刷新</button>
+      <button class="btn" id="btnLoadMoreEvents" type="button" style="display:none">加载更早</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>状态</th>
+            <th>级别</th>
+            <th>标题</th>
+            <th>触发时间</th>
+            <th>通知次数</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="eventsBody">
+          <tr><td colspan="6" class="muted">请选择项目</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- 告警规则 -->
+<div class="tab-pane" id="tab-rules">
+  <div class="card" style="margin-bottom:14px">
+    <button class="btn primary" id="btnNewRule" type="button">+ 新建规则</button>
+  </div>
+  <div class="card">
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>条件</th>
+            <th>阈值</th>
+            <th>窗口</th>
+            <th>级别</th>
+            <th>状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="rulesBody">
+          <tr><td colspan="7" class="muted">请选择项目</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- 通知渠道 -->
+<div class="tab-pane" id="tab-channels">
+  <div class="card" style="margin-bottom:14px">
+    <button class="btn primary" id="btnNewChannel" type="button">+ 新建渠道</button>
+  </div>
+  <div class="card">
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>类型</th>
+            <th>配置</th>
+            <th>状态</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="channelsBody">
+          <tr><td colspan="5" class="muted">请选择项目</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- 规则编辑模态框 -->
+<div class="modal" id="ruleModal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-head">
+      <h3 id="ruleModalTitle">新建规则</h3>
+      <button class="modal-close" data-close="ruleModal" type="button">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="rows">
+        <div style="flex:1">
+          <label class="muted" for="ruleName">规则名称 *</label>
+          <input id="ruleName" class="field" maxlength="100" />
+        </div>
+      </div>
+      <div class="rows">
+        <div>
+          <label class="muted" for="ruleService">服务名（可选）</label>
+          <input id="ruleService" class="field" placeholder="留空=所有服务" />
+        </div>
+        <div>
+          <label class="muted" for="ruleSeverity">严重级别</label>
+          <select id="ruleSeverity" class="field">
+            <option value="P2">P2</option>
+            <option value="P1">P1</option>
+            <option value="P0">P0</option>
+          </select>
+        </div>
+      </div>
+      <div class="rows">
+        <div>
+          <label class="muted" for="ruleLevels">日志级别（逗号分隔，可选）</label>
+          <input id="ruleLevels" class="field" placeholder="ERROR,FATAL" />
+        </div>
+        <div>
+          <label class="muted" for="ruleKeyword">关键词（可选）</label>
+          <input id="ruleKeyword" class="field" placeholder="如 timeout" />
+        </div>
+      </div>
+      <div class="rows">
+        <div>
+          <label class="muted" for="ruleThreshold">阈值 *</label>
+          <input id="ruleThreshold" class="field" type="number" min="1" value="10" />
+        </div>
+        <div>
+          <label class="muted" for="ruleWindow">时间窗口（分钟）*</label>
+          <input id="ruleWindow" class="field" type="number" min="1" max="1440" value="5" />
+        </div>
+      </div>
+      <div class="rows">
+        <div>
+          <label class="muted" for="ruleCooldown">冷却时间（分钟）</label>
+          <input id="ruleCooldown" class="field" type="number" min="0" value="5" />
+        </div>
+        <div>
+          <label class="muted" for="ruleRepeat">重发间隔（分钟，空=不重发）</label>
+          <input id="ruleRepeat" class="field" type="number" min="1" placeholder="不重发" />
+        </div>
+      </div>
+      <div class="rows">
+        <div>
+          <label class="muted">通知渠道 *</label>
+          <div id="ruleChannelsCheckboxes" class="checkbox-group"></div>
+        </div>
+        <div>
+          <label class="muted" for="ruleEnabled">启用</label>
+          <select id="ruleEnabled" class="field">
+            <option value="true">启用</option>
+            <option value="false">停用</option>
+          </select>
+        </div>
+      </div>
+      <div class="rows">
+        <label class="muted" style="display:flex;align-items:center;gap:6px">
+          <input id="ruleNotifyRecovery" type="checkbox" checked />
+          恢复时发送通知
+        </label>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close="ruleModal" type="button">取消</button>
+      <button class="btn primary" id="btnSaveRule" type="button">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 渠道编辑模态框 -->
+<div class="modal" id="channelModal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-head">
+      <h3 id="channelModalTitle">新建渠道</h3>
+      <button class="modal-close" data-close="channelModal" type="button">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="rows">
+        <div style="flex:1">
+          <label class="muted" for="channelName">渠道名称 *</label>
+          <input id="channelName" class="field" maxlength="100" />
+        </div>
+        <div>
+          <label class="muted" for="channelType">类型 *</label>
+          <select id="channelType" class="field">
+            <option value="DingTalk">钉钉</option>
+            <option value="WeCom">企业微信</option>
+            <option value="Email">邮件</option>
+            <option value="Webhook">Webhook</option>
+          </select>
+        </div>
+      </div>
+      <div id="channelConfigArea"></div>
+      <div class="rows">
+        <div>
+          <label class="muted" for="channelEnabled">状态</label>
+          <select id="channelEnabled" class="field">
+            <option value="true">启用</option>
+            <option value="false">停用</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close="channelModal" type="button">取消</button>
+      <button class="btn primary" id="btnSaveChannel" type="button">保存</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .alert-tabs { display:flex; gap:4px; margin-bottom:16px; border-bottom:2px solid var(--line); }
+  .tab-btn { padding:10px 18px; border:none; background:none; cursor:pointer; color:var(--muted); font-size:14px; border-bottom:2px solid transparent; margin-bottom:-2px; }
+  .tab-btn.active { color:var(--blue); border-bottom-color:var(--blue); font-weight:600; }
+  .tab-pane { display:none; }
+  .tab-pane.active { display:block; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; z-index:1000; }
+  .modal-content { background:#fff; border-radius:13px; width:640px; max-width:92vw; max-height:90vh; display:flex; flex-direction:column; }
+  .modal-head { padding:18px 22px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+  .modal-head h3 { margin:0; }
+  .modal-close { border:none; background:none; font-size:24px; cursor:pointer; color:var(--muted); }
+  .modal-body { padding:20px 22px; overflow-y:auto; }
+  .modal-foot { padding:14px 22px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:10px; }
+  .checkbox-group { display:flex; flex-wrap:wrap; gap:10px; padding:6px 0; }
+  .checkbox-group label { display:flex; align-items:center; gap:5px; }
+  .sev-P0 { color:var(--red); font-weight:600; }
+  .sev-P1 { color:var(--orange); font-weight:600; }
+  .sev-P2 { color:var(--blue); font-weight:600; }
+  .status-firing { color:var(--red); }
+  .status-acknowledged { color:var(--orange); }
+  .status-resolved { color:var(--green); }
+</style>
+
+@section Scripts {
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const projectSelect = $('projectId');
+  const notice = $('notice');
+  let currentProjectId = null;
+  let eventsCursor = null;
+  let editingRuleId = null;
+  let editingChannelId = null;
+
+  function showNotice(text, isError) {
+    notice.style.display = 'block';
+    notice.textContent = text;
+    notice.style.background = isError ? '#ffebee' : '#fff8e9';
+    notice.style.color = isError ? '#d74652' : '#8a6420';
+    notice.style.borderColor = isError ? '#ffcdd2' : '#ffe8ba';
+    setTimeout(() => { notice.style.display = 'none'; }, 4000);
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // Tab 切换
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      $('tab-' + btn.dataset.tab).classList.add('active');
+      if (btn.dataset.tab === 'events') loadEvents(true);
+      if (btn.dataset.tab === 'rules') loadRules();
+      if (btn.dataset.tab === 'channels') loadChannels();
+    });
+  });
+
+  document.querySelectorAll('[data-close]').forEach(btn => {
+    btn.addEventListener('click', () => { $(btn.dataset.close).style.display = 'none'; });
+  });
+
+  // 加载项目
+  async function loadProjects() {
+    try {
+      const items = await LogPilotApi.api('/api/v1/projects');
+      const params = new URLSearchParams(location.search);
+      const preset = params.get('projectId');
+      projectSelect.innerHTML = items.map(p =>
+        `<option value="${p.id}">${escapeHtml(p.name)}</option>`
+      ).join('') || '<option value="">暂无项目</option>';
+      if (preset) projectSelect.value = preset;
+      if (projectSelect.value) {
+        currentProjectId = projectSelect.value;
+        loadEvents(true);
+      }
+    } catch (e) {
+      showNotice('加载项目失败: ' + e.message, true);
+    }
+  }
+
+  projectSelect.addEventListener('change', () => {
+    currentProjectId = projectSelect.value;
+    eventsCursor = null;
+    loadEvents(true);
+  });
+
+  // —— 告警事件 ——
+  async function loadEvents(reset) {
+    if (!currentProjectId) return;
+    if (reset) eventsCursor = null;
+    const status = $('eventStatus').value;
+    const qs = new URLSearchParams({ limit: '20' });
+    if (status) qs.set('status', status);
+    if (eventsCursor) qs.set('cursor', eventsCursor);
+    try {
+      const result = await LogPilotApi.api('/api/v1/alerts/projects/' + currentProjectId + '/events?' + qs.toString());
+      const tbody = $('eventsBody');
+      const rows = (result.items || []).map(e => `
+        <tr>
+          <td class="status-${e.status}">${e.status === 'firing' ? '🔴 触发中' : e.status === 'acknowledged' ? '🟡 已确认' : '🟢 已恢复'}</td>
+          <td class="sev-${e.severity}">${e.severity}</td>
+          <td>${escapeHtml(e.title)}<br><span class="muted" style="font-size:12px">${escapeHtml(e.message.split('\n')[0])}</span></td>
+          <td>${escapeHtml(new Date(e.triggeredAt).toLocaleString())}</td>
+          <td>${e.notifyCount}</td>
+          <td>
+            ${e.status !== 'resolved' ? `<button class="btn" data-ack="${e.id}" type="button">确认</button> <button class="btn" data-resolve="${e.id}" type="button">恢复</button>` : '-'}
+          </td>
+        </tr>`).join('');
+      if (reset) {
+        tbody.innerHTML = rows || '<tr><td colspan="6" class="muted">暂无告警事件</td></tr>';
+      } else {
+        tbody.insertAdjacentHTML('beforeend', rows);
+      }
+      $('btnLoadMoreEvents').style.display = result.hasMore ? 'inline-block' : 'none';
+      eventsCursor = result.nextCursor;
+    } catch (e) {
+      showNotice('加载事件失败: ' + e.message, true);
+    }
+  }
+
+  $('btnRefreshEvents').addEventListener('click', () => loadEvents(true));
+  $('btnLoadMoreEvents').addEventListener('click', () => loadEvents(false));
+  $('eventStatus').addEventListener('change', () => loadEvents(true));
+
+  $('eventsBody').addEventListener('click', async (e) => {
+    const ackId = e.target.getAttribute('data-ack');
+    const resolveId = e.target.getAttribute('data-resolve');
+    if (ackId) {
+      try {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/events/${ackId}/acknowledge`, { method: 'POST' });
+        showNotice('已确认');
+        loadEvents(true);
+      } catch (err) { showNotice(err.message, true); }
+    }
+    if (resolveId) {
+      try {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/events/${resolveId}/resolve`, { method: 'POST' });
+        showNotice('已标记恢复');
+        loadEvents(true);
+      } catch (err) { showNotice(err.message, true); }
+    }
+  });
+
+  // —— 告警规则 ——
+  async function loadRules() {
+    if (!currentProjectId) return;
+    try {
+      const rules = await LogPilotApi.api('/api/v1/alerts/projects/' + currentProjectId + '/rules');
+      $('rulesBody').innerHTML = rules.map(r => `
+        <tr>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${r.conditionType}${r.levels?.length ? ' [' + r.levels.join(',') + ']' : ''}${r.keyword ? ' 含:' + escapeHtml(r.keyword) : ''}</td>
+          <td>≥ ${r.threshold}</td>
+          <td>${r.windowMinutes} 分钟</td>
+          <td class="sev-${r.severity}">${r.severity}</td>
+          <td>${r.enabled ? '启用' : '停用'}</td>
+          <td>
+            <button class="btn" data-edit-rule="${r.id}" type="button">编辑</button>
+            <button class="btn" data-del-rule="${r.id}" type="button">删除</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="7" class="muted">暂无规则</td></tr>';
+    } catch (e) {
+      showNotice('加载规则失败: ' + e.message, true);
+    }
+  }
+
+  async function loadChannelsForRule() {
+    if (!currentProjectId) return;
+    try {
+      const channels = await LogPilotApi.api('/api/v1/alerts/projects/' + currentProjectId + '/channels');
+      $('ruleChannelsCheckboxes').innerHTML = channels.map(c =>
+        `<label><input type="checkbox" value="${c.id}" ${c.enabled ? '' : 'disabled'} /> ${escapeHtml(c.name)} (${c.type})</label>`
+      ).join('') || '<span class="muted">请先创建通知渠道</span>';
+    } catch (e) {
+      $('ruleChannelsCheckboxes').innerHTML = '<span class="muted">加载渠道失败</span>';
+    }
+  }
+
+  $('btnNewRule').addEventListener('click', () => {
+    editingRuleId = null;
+    $('ruleModalTitle').textContent = '新建规则';
+    $('ruleName').value = '';
+    $('ruleService').value = '';
+    $('ruleSeverity').value = 'P2';
+    $('ruleLevels').value = 'ERROR,FATAL';
+    $('ruleKeyword').value = '';
+    $('ruleThreshold').value = '10';
+    $('ruleWindow').value = '5';
+    $('ruleCooldown').value = '5';
+    $('ruleRepeat').value = '';
+    $('ruleEnabled').value = 'true';
+    $('ruleNotifyRecovery').checked = true;
+    loadChannelsForRule();
+    $('ruleModal').style.display = 'flex';
+  });
+
+  $('rulesBody').addEventListener('click', async (e) => {
+    const editId = e.target.getAttribute('data-edit-rule');
+    const delId = e.target.getAttribute('data-del-rule');
+    if (editId) {
+      try {
+        const rule = await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/rules/${editId}`);
+        editingRuleId = editId;
+        $('ruleModalTitle').textContent = '编辑规则';
+        $('ruleName').value = rule.name;
+        $('ruleService').value = rule.serviceName || '';
+        $('ruleSeverity').value = rule.severity;
+        $('ruleLevels').value = (rule.levels || []).join(',');
+        $('ruleKeyword').value = rule.keyword || '';
+        $('ruleThreshold').value = rule.threshold;
+        $('ruleWindow').value = rule.windowMinutes;
+        $('ruleCooldown').value = rule.cooldownMinutes;
+        $('ruleRepeat').value = rule.repeatMinutes || '';
+        $('ruleEnabled').value = String(rule.enabled);
+        $('ruleNotifyRecovery').checked = rule.notifyRecovery;
+        await loadChannelsForRule();
+        document.querySelectorAll('#ruleChannelsCheckboxes input').forEach(cb => {
+          cb.checked = (rule.channelIds || []).includes(Number(cb.value));
+        });
+        $('ruleModal').style.display = 'flex';
+      } catch (err) { showNotice(err.message, true); }
+    }
+    if (delId) {
+      if (!confirm('确认删除该规则？')) return;
+      try {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/rules/${delId}`, { method: 'DELETE' });
+        showNotice('已删除');
+        loadRules();
+      } catch (err) { showNotice(err.message, true); }
+    }
+  });
+
+  $('btnSaveRule').addEventListener('click', async () => {
+    const name = $('ruleName').value.trim();
+    if (!name) { showNotice('规则名称必填', true); return; }
+    const threshold = Number($('ruleThreshold').value);
+    const windowMinutes = Number($('ruleWindow').value);
+    if (!threshold || threshold <= 0) { showNotice('阈值必须大于 0', true); return; }
+    if (!windowMinutes || windowMinutes <= 0) { showNotice('时间窗口必须大于 0', true); return; }
+    const channelIds = Array.from(document.querySelectorAll('#ruleChannelsCheckboxes input:checked')).map(cb => Number(cb.value));
+    if (channelIds.length === 0) { showNotice('至少选择一个通知渠道', true); return; }
+
+    const levels = $('ruleLevels').value.split(',').map(s => s.trim()).filter(Boolean);
+    const body = {
+      name,
+      description: '',
+      serviceName: $('ruleService').value.trim() || null,
+      severity: $('ruleSeverity').value,
+      levels: levels.length ? levels : null,
+      keyword: $('ruleKeyword').value.trim() || null,
+      conditionType: 'Count',
+      threshold,
+      windowMinutes,
+      cooldownMinutes: Number($('ruleCooldown').value) || 5,
+      repeatMinutes: $('ruleRepeat').value ? Number($('ruleRepeat').value) : null,
+      channelIds,
+      enabled: $('ruleEnabled').value === 'true',
+      notifyRecovery: $('ruleNotifyRecovery').checked
+    };
+
+    try {
+      if (editingRuleId) {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/rules/${editingRuleId}`, { method: 'PATCH', body });
+      } else {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/rules`, { method: 'POST', body });
+      }
+      $('ruleModal').style.display = 'none';
+      showNotice(editingRuleId ? '已更新' : '已创建');
+      loadRules();
+    } catch (e) { showNotice(e.message, true); }
+  });
+
+  // —— 通知渠道 ——
+  async function loadChannels() {
+    if (!currentProjectId) return;
+    try {
+      const channels = await LogPilotApi.api('/api/v1/alerts/projects/' + currentProjectId + '/channels');
+      $('channelsBody').innerHTML = channels.map(c => `
+        <tr>
+          <td>${escapeHtml(c.name)}</td>
+          <td>${c.type}</td>
+          <td class="muted">${escapeHtml(c.configSummary)}</td>
+          <td>${c.enabled ? '启用' : '停用'}</td>
+          <td>
+            <button class="btn" data-test-channel="${c.id}" type="button">测试</button>
+            <button class="btn" data-edit-channel="${c.id}" type="button">编辑</button>
+            <button class="btn" data-del-channel="${c.id}" type="button">删除</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="5" class="muted">暂无渠道</td></tr>';
+    } catch (e) {
+      showNotice('加载渠道失败: ' + e.message, true);
+    }
+  }
+
+  function renderChannelConfig(type, config) {
+    config = config || {};
+    const area = $('channelConfigArea');
+    if (type === 'DingTalk') {
+      area.innerHTML = `
+        <div class="rows"><div style="flex:1">
+          <label class="muted" for="cfgWebhook">Webhook URL *</label>
+          <input id="cfgWebhook" class="field" value="${escapeHtml(config.webhookUrl || '')}" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx" />
+        </div></div>
+        <div class="rows"><div style="flex:1">
+          <label class="muted" for="cfgSecret">加签密钥（可选）</label>
+          <input id="cfgSecret" class="field" value="${escapeHtml(config.secret || '')}" />
+        </div></div>`;
+    } else if (type === 'WeCom') {
+      area.innerHTML = `
+        <div class="rows"><div style="flex:1">
+          <label class="muted" for="cfgWebhook">Webhook URL *</label>
+          <input id="cfgWebhook" class="field" value="${escapeHtml(config.webhookUrl || '')}" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx" />
+        </div></div>`;
+    } else if (type === 'Email') {
+      area.innerHTML = `
+        <div class="rows">
+          <div><label class="muted" for="cfgSmtpHost">SMTP 主机 *</label><input id="cfgSmtpHost" class="field" value="${escapeHtml(config.smtpHost || '')}" /></div>
+          <div><label class="muted" for="cfgSmtpPort">端口</label><input id="cfgSmtpPort" class="field" type="number" value="${config.smtpPort || 587}" /></div>
+        </div>
+        <div class="rows">
+          <div><label class="muted" for="cfgUsername">用户名</label><input id="cfgUsername" class="field" value="${escapeHtml(config.username || '')}" /></div>
+          <div><label class="muted" for="cfgPassword">密码</label><input id="cfgPassword" class="field" type="password" value="${escapeHtml(config.password || '')}" /></div>
+        </div>
+        <div class="rows">
+          <div><label class="muted" for="cfgFrom">发件人</label><input id="cfgFrom" class="field" value="${escapeHtml(config.from || '')}" /></div>
+          <div><label class="muted" for="cfgEnableSsl">SSL</label><select id="cfgEnableSsl" class="field"><option value="true" ${config.enableSsl !== false ? 'selected' : ''}>是</option><option value="false" ${config.enableSsl === false ? 'selected' : ''}>否</option></select></div>
+        </div>
+        <div class="rows"><div style="flex:1">
+          <label class="muted" for="cfgTo">收件人（逗号分隔）*</label>
+          <input id="cfgTo" class="field" value="${escapeHtml((config.to || []).join(','))}" />
+        </div></div>`;
+    } else if (type === 'Webhook') {
+      area.innerHTML = `
+        <div class="rows"><div style="flex:1">
+          <label class="muted" for="cfgUrl">URL *</label>
+          <input id="cfgUrl" class="field" value="${escapeHtml(config.url || '')}" placeholder="https://your-server.com/webhook" />
+        </div></div>
+        <div class="rows"><div style="flex:1">
+          <label class="muted" for="cfgHeaders">Headers（JSON，可选）</label>
+          <textarea id="cfgHeaders" class="field" rows="3">${escapeHtml(config.headers ? JSON.stringify(config.headers, null, 2) : '{}')}</textarea>
+        </div></div>`;
+    }
+  }
+
+  $('channelType').addEventListener('change', () => renderChannelConfig($('channelType').value, {}));
+
+  $('btnNewChannel').addEventListener('click', () => {
+    editingChannelId = null;
+    $('channelModalTitle').textContent = '新建渠道';
+    $('channelName').value = '';
+    $('channelType').value = 'DingTalk';
+    $('channelEnabled').value = 'true';
+    renderChannelConfig('DingTalk', {});
+    $('channelModal').style.display = 'flex';
+  });
+
+  $('channelsBody').addEventListener('click', async (e) => {
+    const testId = e.target.getAttribute('data-test-channel');
+    const editId = e.target.getAttribute('data-edit-channel');
+    const delId = e.target.getAttribute('data-del-channel');
+    if (testId) {
+      try {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/channels/${testId}/test`, { method: 'POST' });
+        showNotice('测试消息已发送');
+      } catch (err) { showNotice(err.message, true); }
+    }
+    if (editId) {
+      try {
+        const channels = await LogPilotApi.api('/api/v1/alerts/projects/' + currentProjectId + '/channels');
+        const ch = channels.find(c => c.id === Number(editId));
+        if (!ch) return;
+        editingChannelId = editId;
+        $('channelModalTitle').textContent = '编辑渠道';
+        $('channelName').value = ch.name;
+        $('channelType').value = ch.type.charAt(0).toUpperCase() + ch.type.slice(1);
+        $('channelEnabled').value = String(ch.enabled);
+        // 配置摘要不可见，编辑时需重新输入（为安全起见不回填密钥）
+        renderChannelConfig($('channelType').value, {});
+        $('channelModal').style.display = 'flex';
+      } catch (err) { showNotice(err.message, true); }
+    }
+    if (delId) {
+      if (!confirm('确认删除该渠道？')) return;
+      try {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/channels/${delId}`, { method: 'DELETE' });
+        showNotice('已删除');
+        loadChannels();
+      } catch (err) { showNotice(err.message, true); }
+    }
+  });
+
+  $('btnSaveChannel').addEventListener('click', async () => {
+    const name = $('channelName').value.trim();
+    if (!name) { showNotice('渠道名称必填', true); return; }
+    const type = $('channelType').value;
+    let configJson;
+    try {
+      if (type === 'DingTalk') {
+        const webhookUrl = $('cfgWebhook').value.trim();
+        if (!webhookUrl) { showNotice('Webhook URL 必填', true); return; }
+        configJson = JSON.stringify({ webhookUrl, secret: $('cfgSecret').value.trim() || null });
+      } else if (type === 'WeCom') {
+        const webhookUrl = $('cfgWebhook').value.trim();
+        if (!webhookUrl) { showNotice('Webhook URL 必填', true); return; }
+        configJson = JSON.stringify({ webhookUrl });
+      } else if (type === 'Email') {
+        const smtpHost = $('cfgSmtpHost').value.trim();
+        const to = $('cfgTo').value.split(',').map(s => s.trim()).filter(Boolean);
+        if (!smtpHost || to.length === 0) { showNotice('SMTP 主机和收件人必填', true); return; }
+        configJson = JSON.stringify({
+          smtpHost, smtpPort: Number($('cfgSmtpPort').value) || 587,
+          username: $('cfgUsername').value.trim() || null,
+          password: $('cfgPassword').value || null,
+          from: $('cfgFrom').value.trim() || null,
+          enableSsl: $('cfgEnableSsl').value === 'true', to
+        });
+      } else if (type === 'Webhook') {
+        const url = $('cfgUrl').value.trim();
+        if (!url) { showNotice('URL 必填', true); return; }
+        let headers = {};
+        const headersText = $('cfgHeaders').value.trim();
+        if (headersText) headers = JSON.parse(headersText);
+        configJson = JSON.stringify({ url, headers });
+      }
+    } catch (e) {
+      showNotice('配置格式错误: ' + e.message, true); return;
+    }
+
+    const body = { name, type: type, configJson, enabled: $('channelEnabled').value === 'true' };
+    try {
+      if (editingChannelId) {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/channels/${editingChannelId}`, { method: 'PATCH', body });
+      } else {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/channels`, { method: 'POST', body });
+      }
+      $('channelModal').style.display = 'none';
+      showNotice(editingChannelId ? '已更新' : '已创建');
+      loadChannels();
+    } catch (e) { showNotice(e.message, true); }
+  });
+
+  loadProjects();
+})();
+</script>
+}

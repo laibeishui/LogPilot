@@ -18,6 +18,8 @@ public sealed class SystemHealthReport
 
     public required ComponentHealth VictoriaLogs { get; init; }
 
+    public ComponentHealth? AlertEvaluator { get; init; }
+
     public bool IsReady =>
         LogPilot.Status == HealthStatus.Healthy
         && Sqlite.Status == HealthStatus.Healthy

@@ -138,6 +138,104 @@ public sealed class LogQueryService : ILogQueryService
         };
     }
 
+    public async Task<StatsOverviewDto> GetOverviewAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        DateTimeOffset? startTime,
+        DateTimeOffset? endTime,
+        CancellationToken cancellationToken = default)
+    {
+        if (projectId <= 0)
+        {
+            throw new AppException("INVALID_ARGUMENT", "projectId 必填。");
+        }
+
+        await _access.EnsureCanViewAsync(userId, isSystemAdmin, projectId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var (start, end) = ResolveRange(startTime, endTime);
+
+        var totalTask = _searcher.CountAsync(
+            projectId, start, end, null, Array.Empty<string>(), null, null, cancellationToken);
+
+        var errorTask = _searcher.CountAsync(
+            projectId, start, end, null, new[] { "ERROR", "FATAL" }, null, null, cancellationToken);
+
+        var servicesTask = _searcher.ListServicesAsync(projectId, start, end, cancellationToken);
+
+        await Task.WhenAll(totalTask, errorTask, servicesTask).ConfigureAwait(false);
+
+        return new StatsOverviewDto
+        {
+            ProjectId = projectId,
+            TotalLogs = totalTask.Result,
+            ErrorLogs = errorTask.Result,
+            ServiceCount = servicesTask.Result.Count,
+            StartTime = start,
+            EndTime = end
+        };
+    }
+
+    public async Task<StatsTrendDto> GetTrendAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        DateTimeOffset? startTime,
+        DateTimeOffset? endTime,
+        string? interval,
+        CancellationToken cancellationToken = default)
+    {
+        if (projectId <= 0)
+        {
+            throw new AppException("INVALID_ARGUMENT", "projectId 必填。");
+        }
+
+        await _access.EnsureCanViewAsync(userId, isSystemAdmin, projectId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var (start, end) = ResolveRange(startTime, endTime);
+        var cleanInterval = NormalizeInterval(interval);
+
+        var allTask = _searcher.TrendAsync(projectId, start, end, cleanInterval, false, cancellationToken);
+        var errTask = _searcher.TrendAsync(projectId, start, end, cleanInterval, true, cancellationToken);
+
+        await Task.WhenAll(allTask, errTask).ConfigureAwait(false);
+
+        var errorByBucket = errTask.Result.ToDictionary(p => p.Bucket, p => p.Count);
+
+        var points = allTask.Result
+            .Select(p => new TrendPointDto
+            {
+                Time = p.Bucket,
+                Count = p.Count,
+                Errors = errorByBucket.TryGetValue(p.Bucket, out var e) ? e : 0
+            })
+            .ToList();
+
+        return new StatsTrendDto
+        {
+            Interval = cleanInterval,
+            Points = points
+        };
+    }
+
+    private static string NormalizeInterval(string? interval)
+    {
+        if (string.IsNullOrWhiteSpace(interval))
+        {
+            return "5m";
+        }
+
+        var trimmed = interval.Trim().ToLowerInvariant();
+        if (System.Text.RegularExpressions.Regex.IsMatch(trimmed, @"^\d+[smhd]$"))
+        {
+            return trimmed;
+        }
+
+        return "5m";
+    }
+
     private (DateTimeOffset Start, DateTimeOffset End) ResolveRange(
         DateTimeOffset? startTime,
         DateTimeOffset? endTime)
