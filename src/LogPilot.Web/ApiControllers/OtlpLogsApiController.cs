@@ -9,7 +9,8 @@ using Microsoft.Extensions.Options;
 namespace LogPilot.Web.ApiControllers;
 
 /// <summary>
-/// OTLP/HTTP Protobuf 日志接入（主入口）：POST /v1/logs
+/// OTLP/HTTP 日志接入（主入口）：POST /v1/logs
+/// 支持 Protobuf（application/x-protobuf，默认）与 JSON（application/json）两种编码。
 /// </summary>
 [ApiController]
 [AllowAnonymous]
@@ -50,7 +51,9 @@ public sealed class OtlpLogsApiController : ControllerBase
                 return StatusCode(StatusCodes.Status413PayloadTooLarge);
             }
 
-            var result = await _ingest.IngestAsync(principal, bytes, cancellationToken)
+            var encoding = ResolveEncoding();
+
+            var result = await _ingest.IngestAsync(principal, bytes, encoding, cancellationToken)
                 .ConfigureAwait(false);
 
             Response.StatusCode = result.StatusCode;
@@ -64,6 +67,14 @@ public sealed class OtlpLogsApiController : ControllerBase
         {
             return BadRequest();
         }
+    }
+
+    private OtlpEncoding ResolveEncoding()
+    {
+        var contentType = Request.ContentType ?? string.Empty;
+        return contentType.Contains("json", StringComparison.OrdinalIgnoreCase)
+            ? OtlpEncoding.Json
+            : OtlpEncoding.Protobuf;
     }
 
     private async Task<Stream> OpenBodyStreamAsync(CancellationToken cancellationToken)

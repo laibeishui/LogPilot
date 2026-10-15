@@ -32,6 +32,7 @@ public sealed class AlertRule
     // —— 触发条件 ——
     public required AlertConditionType ConditionType { get; init; }
 
+    /// <summary>Count 时为条数；Ratio 时为百分比（1~100）。</summary>
     public required int Threshold { get; init; }
 
     public required int WindowMinutes { get; init; }
@@ -50,6 +51,9 @@ public sealed class AlertRule
 
     /// <summary>持续未恢复时重发间隔（分钟）；null 表示不重发。</summary>
     public int? RepeatMinutes { get; init; }
+
+    /// <summary>静默截止时间；该时间之前不发送通知。null 表示未静默。</summary>
+    public DateTimeOffset? SilenceUntil { get; init; }
 
     public long? CreatedBy { get; init; }
 

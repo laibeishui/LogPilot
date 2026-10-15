@@ -53,6 +53,14 @@ public sealed class SqliteMigrator
 
             _logger.LogInformation("Applying SQLite migration {Version}: {Name}", migration.Version, migration.Name);
 
+            // 迁移脚本可用 "-- @no-transaction" 首行标记自行控制事务（如重建表需先关闭外键）。
+            if (migration.NoTransaction)
+            {
+                await connection.ExecuteAsync(migration.Sql).ConfigureAwait(false);
+                await RecordMigrationAsync(connection, migration).ConfigureAwait(false);
+                continue;
+            }
+
             await using var transaction = (SqliteTransaction)await connection
                 .BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -60,18 +68,7 @@ public sealed class SqliteMigrator
             try
             {
                 await connection.ExecuteAsync(migration.Sql, transaction: transaction).ConfigureAwait(false);
-                await connection.ExecuteAsync(
-                    """
-                    INSERT INTO lp_schema_migration(version, name, applied_at)
-                    VALUES (@Version, @Name, @AppliedAt);
-                    """,
-                    new
-                    {
-                        migration.Version,
-                        migration.Name,
-                        AppliedAt = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
-                    },
-                    transaction).ConfigureAwait(false);
+                await RecordMigrationAsync(connection, migration, transaction).ConfigureAwait(false);
 
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -82,6 +79,20 @@ public sealed class SqliteMigrator
             }
         }
     }
+
+    private static Task RecordMigrationAsync(SqliteConnection connection, MigrationScript migration, SqliteTransaction? transaction = null)
+        => connection.ExecuteAsync(
+            """
+            INSERT INTO lp_schema_migration(version, name, applied_at)
+            VALUES (@Version, @Name, @AppliedAt);
+            """,
+            new
+            {
+                migration.Version,
+                migration.Name,
+                AppliedAt = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+            },
+            transaction);
 
     private static IEnumerable<MigrationScript> LoadEmbeddedMigrations()
     {
@@ -104,11 +115,12 @@ public sealed class SqliteMigrator
                     ?? throw new InvalidOperationException($"Missing embedded migration: {resourceName}");
                 using var reader = new StreamReader(stream, Encoding.UTF8);
                 var sql = reader.ReadToEnd();
+                var noTransaction = sql.TrimStart().StartsWith("-- @no-transaction", StringComparison.OrdinalIgnoreCase);
 
-                return new MigrationScript(version, Path.GetFileNameWithoutExtension(fileName), sql);
+                return new MigrationScript(version, Path.GetFileNameWithoutExtension(fileName), sql, noTransaction);
             })
             .OrderBy(x => x.Version);
     }
 
-    private sealed record MigrationScript(int Version, string Name, string Sql);
+    private sealed record MigrationScript(int Version, string Name, string Sql, bool NoTransaction);
 }

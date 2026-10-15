@@ -11,10 +11,14 @@ namespace LogPilot.Infrastructure.VictoriaLogs;
 /// </summary>
 public sealed class VictoriaLogsHealthProbe : IHealthProbe
 {
+    /// <summary>连续失败达到该批次数后，将 VictoriaLogs 标记为 Degraded。</summary>
+    private const int DegradedFailureThreshold = 3;
+
     private readonly ISqliteConnectionFactory _sqlite;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly VictoriaLogsOptions _options;
     private readonly AlertEvaluationService _alertEvaluator;
+    private readonly ILogWriteMetrics _writeMetrics;
     private readonly ILogger<VictoriaLogsHealthProbe> _logger;
 
     public VictoriaLogsHealthProbe(
@@ -22,12 +26,14 @@ public sealed class VictoriaLogsHealthProbe : IHealthProbe
         IHttpClientFactory httpClientFactory,
         IOptions<StorageOptions> options,
         AlertEvaluationService alertEvaluator,
+        ILogWriteMetrics writeMetrics,
         ILogger<VictoriaLogsHealthProbe> logger)
     {
         _sqlite = sqlite;
         _httpClientFactory = httpClientFactory;
         _options = options.Value.VictoriaLogs;
         _alertEvaluator = alertEvaluator;
+        _writeMetrics = writeMetrics;
         _logger = logger;
     }
 
@@ -128,21 +134,23 @@ public sealed class VictoriaLogsHealthProbe : IHealthProbe
 
     private async Task<ComponentHealth> CheckVictoriaLogsAsync(CancellationToken cancellationToken)
     {
+        var metrics = _writeMetrics.GetSnapshot();
+
         try
         {
             var client = _httpClientFactory.CreateClient("VictoriaLogs");
             using var response = await client.GetAsync("/", cancellationToken).ConfigureAwait(false);
 
             // VictoriaLogs 根路径通常返回非 5xx；只要能连通即视为可达。
-            var status = response.IsSuccessStatusCode || (int)response.StatusCode < 500
+            var connected = response.IsSuccessStatusCode || (int)response.StatusCode < 500
                 ? HealthStatus.Healthy
                 : HealthStatus.Unhealthy;
 
             return new ComponentHealth
             {
                 Name = "VictoriaLogs",
-                Status = status,
-                Detail = $"HTTP {(int)response.StatusCode}"
+                Status = ApplyWriteFailures(connected, metrics),
+                Detail = BuildWriteDetail($"HTTP {(int)response.StatusCode}", metrics)
             };
         }
         catch (Exception ex)
@@ -152,8 +160,42 @@ public sealed class VictoriaLogsHealthProbe : IHealthProbe
             {
                 Name = "VictoriaLogs",
                 Status = HealthStatus.Unhealthy,
-                Detail = "unreachable"
+                Detail = BuildWriteDetail("unreachable", metrics)
             };
         }
     }
+
+    /// <summary>
+    /// 根路径可达只说明端口活着；写入失败（磁盘满、429、insert 5xx、超时）不会体现为连通性故障。
+    /// 连续失败达到阈值时降级，任一次写入成功后自动恢复。
+    /// </summary>
+    private static HealthStatus ApplyWriteFailures(HealthStatus connected, LogWriteMetricsSnapshot metrics)
+        => connected == HealthStatus.Healthy && metrics.ConsecutiveFailures >= DegradedFailureThreshold
+            ? HealthStatus.Degraded
+            : connected;
+
+    private static string BuildWriteDetail(string connectivity, LogWriteMetricsSnapshot metrics)
+    {
+        if (metrics.TotalRequests == 0)
+        {
+            return connectivity;
+        }
+
+        var detail =
+            $"{connectivity}; writes ok={metrics.TotalRequests - metrics.FailedRequests}/{metrics.TotalRequests}";
+
+        if (metrics.FailedRequests > 0 && metrics.LastFailureAt is { } lastFailureAt)
+        {
+            var ago = DateTimeOffset.UtcNow - lastFailureAt;
+            detail +=
+                $", records lost={metrics.FailedRecords}, last failure {FormatAgo(ago)} ago: {metrics.LastFailureReason}";
+        }
+
+        return detail;
+    }
+
+    private static string FormatAgo(TimeSpan elapsed)
+        => elapsed.TotalMinutes >= 1
+            ? $"{elapsed.TotalMinutes:F0}min"
+            : $"{elapsed.TotalSeconds:F0}s";
 }

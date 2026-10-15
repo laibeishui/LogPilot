@@ -50,13 +50,8 @@
       <h3 style="margin:0">日志趋势</h3>
       <span class="muted small">最近 12 个时段</span>
     </div>
-    <div class="barchart" id="barchart">
-      <div class="muted" style="padding:40px 0;text-align:center;width:100%">选择项目后显示</div>
-    </div>
-    <div class="legend" style="margin-top:10px">
-      <span><span class="dot" style="background:#7895ff"></span>全部日志</span>
-      <span><span class="dot" style="background:#f27988"></span>错误日志</span>
-    </div>
+    <div id="trendChart" style="height:240px;width:100%;display:none"></div>
+    <div id="trendPlaceholder" class="muted" style="height:240px;display:flex;align-items:center;justify-content:center">选择项目后显示</div>
   </div>
   <div class="card pad">
     <div class="sectionhead">
@@ -70,6 +65,31 @@
       <hr style="border:0;border-top:1px solid var(--line);width:100%;margin:4px 0">
       <div class="line"><span class="muted">健康端点</span><a href="/health/ready">/health/ready</a></div>
     </div>
+  </div>
+</div>
+
+<!-- 异常聚合 -->
+<div class="card pad" style="margin-top:18px">
+  <div class="sectionhead">
+    <h3 style="margin:0">异常聚合</h3>
+    <span class="muted small" id="excMeta">按指纹归并同类错误</span>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>问题</th>
+          <th>服务</th>
+          <th>级别</th>
+          <th style="text-align:right">次数</th>
+          <th>首次</th>
+          <th>最近</th>
+        </tr>
+      </thead>
+      <tbody id="exceptionsBody">
+        <tr><td colspan="6" class="muted">选择项目后加载</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
@@ -100,12 +120,6 @@
   .two { display:grid; grid-template-columns:1.5fr 1fr; gap:18px; }
   .sectionhead { display:flex; align-items:center; justify-content:space-between; margin-bottom:15px; gap:12px; }
   .sectionhead h3 { margin:0; font-size:16px; }
-  .barchart { height:210px; display:flex; align-items:end; gap:6px; border-bottom:1px solid #e6eaf0; padding:10px 4px 0; background:linear-gradient(#fff,#f9fbff); }
-  .bar { flex:1; background:linear-gradient(180deg,#7895ff,#c1ceff); border-radius:5px 5px 0 0; min-width:6px; position:relative; }
-  .bar.err { background:linear-gradient(180deg,#f27988,#ffc8cf); }
-  .legend { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
-  .legend span { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:5px; }
-  .dot { width:10px; height:10px; border-radius:2px; display:inline-block; }
   .pad { padding:18px 20px; }
   .small { font-size:12px; }
   @@media(max-width:1000px){ .two{grid-template-columns:1fr} .kpis{grid-template-columns:repeat(2,1fr)} }
@@ -113,6 +127,7 @@
 </style>
 
 @section Scripts {
+<script src="~/lib/echarts/echarts.min.js" asp-append-version="true"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -196,30 +211,46 @@
     }
   }
 
-  // —— 趋势图 ——
+  // —— 趋势图（ECharts） ——
+  let trendChart = null;
+
+  function showTrendPlaceholder(text) {
+    const box = $('trendPlaceholder');
+    box.textContent = text;
+    box.style.display = 'flex';
+    $('trendChart').style.display = 'none';
+  }
+
+  function renderTrend(last12) {
+    const el = $('trendChart');
+    if (!window.echarts) { showTrendPlaceholder('图表库未加载'); return; }
+    $('trendPlaceholder').style.display = 'none';
+    el.style.display = 'block';
+    if (!trendChart) trendChart = window.echarts.init(el);
+    trendChart.setOption({
+      grid: { left: 8, right: 14, top: 40, bottom: 6, containLabel: true },
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['全部日志', '错误日志'], right: 0, top: 2, itemWidth: 12, itemHeight: 10, textStyle: { color: '#66758a', fontSize: 12 } },
+      xAxis: { type: 'category', data: last12.map(p => fmtTime(p.time)), axisLine: { lineStyle: { color: '#e6eaf0' } }, axisLabel: { color: '#66758a', fontSize: 11 } },
+      yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { color: '#eef1f6' } }, axisLabel: { color: '#66758a', fontSize: 11 } },
+      series: [
+        { name: '全部日志', type: 'bar', data: last12.map(p => p.count), itemStyle: { color: '#7895ff', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 22 },
+        { name: '错误日志', type: 'bar', data: last12.map(p => p.errors), itemStyle: { color: '#f27988', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 22 }
+      ]
+    });
+    trendChart.resize();
+  }
+
   async function loadTrend() {
     if (!currentProjectId) return;
     const qs = new URLSearchParams({ projectId: currentProjectId, interval: '5m' });
     try {
       const t = await LogPilotApi.api('/api/v1/stats/trend?' + qs.toString());
-      const points = t.points || [];
-      const last12 = points.slice(-12);
-      if (last12.length === 0) {
-        $('barchart').innerHTML = '<div class="muted" style="padding:40px 0;text-align:center;width:100%">暂无数据</div>';
-        return;
-      }
-      const maxCount = Math.max(1, ...last12.map(p => p.count));
-      const chart = $('barchart');
-      chart.innerHTML = last12.map(p => {
-        const h = Math.max(2, (p.count / maxCount) * 100);
-        const errH = p.errors > 0 ? Math.max(2, (p.errors / maxCount) * 100) : 0;
-        const title = `${fmtTime(p.time)}\n全部: ${p.count}\n错误: ${p.errors}`;
-        return `<div class="bar" title="${title.replace(/"/g, '&quot;')}" style="height:${h}%">
-          ${errH > 0 ? `<div class="bar err" style="height:${(errH/h)*100}%;position:absolute;bottom:0;left:0;right:0;border-radius:5px 5px 0 0"></div>` : ''}
-        </div>`;
-      }).join('');
+      const last12 = (t.points || []).slice(-12);
+      if (last12.length === 0) { showTrendPlaceholder('暂无数据'); return; }
+      renderTrend(last12);
     } catch (e) {
-      $('barchart').innerHTML = `<div class="muted" style="padding:40px 0;text-align:center;width:100%">加载失败</div>`;
+      showTrendPlaceholder('加载失败');
       console.warn(e);
     }
   }
@@ -253,12 +284,36 @@
     }
   }
 
+  // —— 异常聚合 ——
+  async function loadExceptions() {
+    if (!currentProjectId) return;
+    const qs = new URLSearchParams({ projectId: currentProjectId, top: '10' });
+    try {
+      const r = await LogPilotApi.api('/api/v1/stats/exceptions?' + qs.toString());
+      const groups = r.groups || [];
+      $('excMeta').textContent = r.scanned
+        ? `扫描 ${r.scanned} 条错误${r.truncated ? '（达上限，实际可能更多）' : ''} · 归并为 ${groups.length} 个问题`
+        : '按指纹归并同类错误';
+      $('exceptionsBody').innerHTML = groups.map(g => `
+        <tr class="clickable" data-ts="${escapeHtml(g.lastSeen)}">
+          <td class="msg" title="${escapeHtml(g.sampleMessage)}"><strong>${escapeHtml(g.title)}</strong></td>
+          <td>${escapeHtml(g.serviceName)}</td>
+          <td><span class="tag ${levelClass(g.level)}">${escapeHtml(g.level)}</span></td>
+          <td style="text-align:right">${Number(g.count).toLocaleString()}</td>
+          <td style="white-space:nowrap" class="muted small">${escapeHtml(new Date(g.firstSeen).toLocaleString())}</td>
+          <td style="white-space:nowrap" class="muted small">${escapeHtml(new Date(g.lastSeen).toLocaleString())}</td>
+        </tr>`).join('') || '<tr><td colspan="6" class="muted">时间窗内无错误日志</td></tr>';
+    } catch (e) {
+      $('exceptionsBody').innerHTML = `<tr><td colspan="6" class="muted">加载失败：${escapeHtml(e.message)}</td></tr>`;
+    }
+  }
+
   function fmtTime(iso) {
     try { return new Date(iso).toLocaleTimeString(); } catch { return iso; }
   }
 
   async function loadAll() {
-    await Promise.all([loadOverview(), loadTrend(), loadRecentErrors()]);
+    await Promise.all([loadOverview(), loadTrend(), loadExceptions(), loadRecentErrors()]);
   }
 
   projectSelect.addEventListener('change', () => {
@@ -268,6 +323,8 @@
 
   loadHealth();
   loadProjects();
+
+  window.addEventListener('resize', () => trendChart?.resize());
 
   // 点击错误行跳转到日志详情
   $('errorsBody').addEventListener('click', (e) => {

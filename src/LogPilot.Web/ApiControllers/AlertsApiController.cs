@@ -163,6 +163,22 @@ public sealed class AlertsApiController : ControllerBase
         return Ok(new { ok = true });
     }
 
+    [HttpPost("projects/{projectId:long}/rules/{ruleId:long}/silence")]
+    public async Task<IActionResult> SilenceRule(
+        long projectId,
+        long ruleId,
+        [FromBody] SilenceAlertRuleRequest? request,
+        CancellationToken cancellationToken)
+    {
+        if (!User.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var rule = await _rules.SetSilenceAsync(userId, User.IsSystemAdmin(), projectId, ruleId, request?.Minutes, cancellationToken);
+        return Ok(rule);
+    }
+
     // —— 告警事件 ——
 
     [HttpGet("projects/{projectId:long}/events")]

@@ -11,11 +11,16 @@ namespace LogPilot.Web.ApiControllers;
 public sealed class ProjectsApiController : ControllerBase
 {
     private readonly IProjectService _projects;
+    private readonly IApplicationService _applications;
     private readonly IApiKeyService _apiKeys;
 
-    public ProjectsApiController(IProjectService projects, IApiKeyService apiKeys)
+    public ProjectsApiController(
+        IProjectService projects,
+        IApplicationService applications,
+        IApiKeyService apiKeys)
     {
         _projects = projects;
+        _applications = applications;
         _apiKeys = apiKeys;
     }
 
@@ -68,6 +73,34 @@ public sealed class ProjectsApiController : ControllerBase
 
         var project = await _projects.UpdateAsync(userId, User.IsSystemAdmin(), id, request, cancellationToken);
         return Ok(project);
+    }
+
+    [HttpGet("{id:long}/applications")]
+    public async Task<IActionResult> ListApplications(long id, CancellationToken cancellationToken)
+    {
+        if (!User.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var items = await _applications.ListAsync(userId, User.IsSystemAdmin(), id, cancellationToken);
+        return Ok(items);
+    }
+
+    [HttpPost("{id:long}/applications")]
+    public async Task<IActionResult> CreateApplication(
+        long id,
+        [FromBody] CreateApplicationRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!User.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var application = await _applications.CreateAsync(
+            userId, User.IsSystemAdmin(), id, request, cancellationToken);
+        return Ok(application);
     }
 
     [HttpGet("{id:long}/api-keys")]

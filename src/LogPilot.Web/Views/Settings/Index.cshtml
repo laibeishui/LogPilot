@@ -1,6 +1,21 @@
+@using LogPilot.Core.Abstractions
+@model LogWriteMetricsSnapshot
 @{
   ViewData["Title"] = "系统设置";
+
+  var okBatches = Model.TotalRequests - Model.FailedRequests;
+  var lastFailure = Model.LastFailureAt is { } at
+    ? $"{at.ToLocalTime():yyyy-MM-dd HH:mm:ss}（{FormatAgo(DateTimeOffset.UtcNow - at)}前）"
+    : "—";
 }
+
+@functions {
+  private static string FormatAgo(TimeSpan elapsed)
+    => elapsed.TotalMinutes >= 1
+      ? $"{elapsed.TotalMinutes:F0} 分钟"
+      : $"{elapsed.TotalSeconds:F0} 秒";
+}
+
 <div class="headline">
   <div>
     <h1>系统设置</h1>
@@ -14,5 +29,20 @@
     <div class="line"><strong>日志引擎</strong><span>VictoriaLogs</span></div>
     <div class="line"><strong>容器部署</strong><span>两个容器</span></div>
     <div class="line"><strong>健康检查</strong><a href="/health/ready">/health/ready</a></div>
+  </div>
+</div>
+<div class="card">
+  <div class="headline" style="margin-bottom:8px">
+    <div>
+      <h2>日志写入诊断</h2>
+      <p>自本次启动以来累计；重启后归零。</p>
+    </div>
+  </div>
+  <div class="rows">
+    <div class="line"><strong>写入批次</strong><span>成功 @okBatches / 共 @Model.TotalRequests</span></div>
+    <div class="line"><strong>写入失败</strong><span>@Model.FailedRequests 次（丢失 @Model.FailedRecords 条日志）</span></div>
+    <div class="line"><strong>连续失败</strong><span>@Model.ConsecutiveFailures 次</span></div>
+    <div class="line"><strong>最近失败时间</strong><span>@lastFailure</span></div>
+    <div class="line"><strong>最近失败原因</strong><span>@(Model.LastFailureReason ?? "—")</span></div>
   </div>
 </div>

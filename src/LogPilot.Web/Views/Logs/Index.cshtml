@@ -16,7 +16,7 @@
     <button class="btn" type="button" data-range="60">最近 1 小时</button>
     <button class="btn" type="button" data-range="1440">最近 24 小时</button>
   </div>
-  <div class="filters" style="grid-template-columns: minmax(160px,1.4fr) minmax(120px,1fr) minmax(120px,1fr) minmax(160px,1.4fr) minmax(160px,1.2fr) auto auto;">
+  <div class="filters" style="grid-template-columns: minmax(160px,1.4fr) minmax(120px,1fr) minmax(120px,1fr) minmax(160px,1.4fr) minmax(160px,1.2fr) auto auto auto auto;">
     <div>
       <label for="projectId">项目</label>
       <select id="projectId" class="field"></select>
@@ -46,6 +46,12 @@
     </div>
     <div>
       <button class="btn" id="btnReset" type="button">重置</button>
+    </div>
+    <div>
+      <button class="btn" id="btnLive" type="button" title="通过 SSE 实时跟随新日志">● 实时</button>
+    </div>
+    <div>
+      <button class="btn" id="btnPause" type="button" disabled>暂停</button>
     </div>
   </div>
   <div class="muted" id="rangeHint" style="font-size:12px"></div>
@@ -99,6 +105,8 @@
     const resultMeta = document.getElementById('resultMeta');
     const btnSearch = document.getElementById('btnSearch');
     const btnMore = document.getElementById('btnMore');
+    const btnLive = document.getElementById('btnLive');
+    const btnPause = document.getElementById('btnPause');
     const drawer = document.getElementById('drawer');
     const drawerBack = document.getElementById('drawerBack');
     const drawerBody = document.getElementById('drawerBody');
@@ -216,6 +224,8 @@
         return;
       }
 
+      if (!append && liveState !== 'off') stopLive(true);
+
       hideNotice();
       btnSearch.disabled = true;
       btnMore.disabled = true;
@@ -288,13 +298,18 @@
 
     async function showDetail(id, timestamp) {
       const projectId = projectSelect.value;
-      if (!projectId || !lastRange) return;
+      if (!projectId || !id) return;
+      const anchor = timestamp ? new Date(timestamp) : new Date();
+      const range = lastRange || {
+        start: new Date(anchor.getTime() - 5 * 60 * 1000),
+        end: new Date(anchor.getTime() + 5 * 60 * 1000)
+      };
       openDrawer();
       drawerBody.innerHTML = '<div class="muted">加载中…</div>';
       const qs = new URLSearchParams({
         projectId,
-        startTime: lastRange.start.toISOString(),
-        endTime: lastRange.end.toISOString()
+        startTime: range.start.toISOString(),
+        endTime: range.end.toISOString()
       });
       try {
         const d = await LogPilotApi.api('/api/v1/logs/' + encodeURIComponent(id) + '?' + qs.toString());
@@ -344,6 +359,124 @@
         showNotice('复制失败，请手动选择', true);
       }
     }
+
+    // —— SSE 实时跟随 ——
+    let liveSource = null;
+    let liveState = 'off'; // off | running | paused
+    let liveBuffer = [];
+    let liveReceived = 0;
+    const LIVE_MAX_ROWS = 500;
+
+    function liveQuery() {
+      const qs = new URLSearchParams({ projectId: projectSelect.value });
+      if (serviceSelect.value) qs.set('service', serviceSelect.value);
+      if (levelSelect.value) qs.set('level', levelSelect.value);
+      if (keywordInput.value.trim()) qs.set('keyword', keywordInput.value.trim());
+      return qs.toString();
+    }
+
+    function liveRowHtml(item) {
+      return `
+        <tr class="clickable" data-id="${escapeHtml(item.id)}" data-ts="${escapeHtml(item.timestamp)}">
+          <td>${escapeHtml(new Date(item.timestamp).toLocaleString())}</td>
+          <td><span class="tag ${levelClass(item.level)}">${escapeHtml(item.level)}</span></td>
+          <td>${escapeHtml(item.serviceName)}</td>
+          <td class="msg" title="${escapeHtml(item.message)}">${escapeHtml(item.message)}</td>
+          <td><code>${escapeHtml(item.traceId || '-')}</code></td>
+        </tr>`;
+    }
+
+    function clearLivePlaceholder() {
+      if (tbody.dataset.placeholder === '1') {
+        tbody.innerHTML = '';
+        tbody.dataset.placeholder = '';
+      }
+    }
+
+    function appendLive(items) {
+      if (!items.length) return;
+      tbody.insertAdjacentHTML('afterbegin', items.map(liveRowHtml).join(''));
+      while (tbody.children.length > LIVE_MAX_ROWS) {
+        tbody.removeChild(tbody.lastElementChild);
+      }
+    }
+
+    function updateLiveMeta() {
+      if (liveState === 'off') return;
+      const label = liveState === 'running' ? '实时接收中' : '已暂停';
+      resultMeta.textContent = `${label} · 已接收 ${liveReceived} 条` +
+        (liveState === 'paused' && liveBuffer.length ? `（缓存 ${liveBuffer.length} 条）` : '');
+    }
+
+    function startLive() {
+      if (!projectSelect.value) { showNotice('请先选择项目', true); return; }
+      if (liveSource) liveSource.close();
+      tbody.dataset.placeholder = '1';
+      tbody.innerHTML = '<tr><td colspan="5" class="muted">实时连接中…</td></tr>';
+      liveReceived = 0;
+      liveBuffer = [];
+      liveState = 'running';
+      btnLive.textContent = '■ 停止';
+      btnPause.disabled = false;
+      btnPause.textContent = '暂停';
+
+      const source = new EventSource('/api/v1/logs/tail?' + liveQuery());
+      liveSource = source;
+
+      source.addEventListener('log', (e) => {
+        if (!liveSource) return;
+        let item;
+        try { item = JSON.parse(e.data); } catch { return; }
+        liveReceived++;
+        if (liveState === 'paused') {
+          if (liveBuffer.length < LIVE_MAX_ROWS) liveBuffer.push(item);
+        } else {
+          clearLivePlaceholder();
+          appendLive([item]);
+        }
+        updateLiveMeta();
+      });
+
+      source.addEventListener('error', () => {
+        if (liveSource) showNotice('实时连接中断，浏览器将自动重连…', true);
+      });
+
+      updateLiveMeta();
+    }
+
+    function stopLive(silent) {
+      if (liveSource) {
+        liveSource.close();
+        liveSource = null;
+      }
+      liveState = 'off';
+      liveBuffer = [];
+      btnLive.textContent = '● 实时';
+      btnPause.disabled = true;
+      btnPause.textContent = '暂停';
+      tbody.dataset.placeholder = '';
+      if (!silent) resultMeta.textContent = '实时已停止';
+    }
+
+    btnLive.addEventListener('click', () => {
+      if (liveState === 'off') startLive();
+      else stopLive(false);
+    });
+
+    btnPause.addEventListener('click', () => {
+      if (liveState === 'running') {
+        liveState = 'paused';
+        btnPause.textContent = '继续';
+      } else if (liveState === 'paused') {
+        liveState = 'running';
+        btnPause.textContent = '暂停';
+        if (liveBuffer.length) {
+          clearLivePlaceholder();
+          appendLive(liveBuffer.splice(0).reverse());
+        }
+      }
+      updateLiveMeta();
+    });
 
     document.getElementById('rangeTabs').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-range]');

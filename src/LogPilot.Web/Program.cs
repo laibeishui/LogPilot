@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using LogPilot.Application;
 using LogPilot.Infrastructure;
 using LogPilot.Infrastructure.Sqlite;
@@ -13,6 +14,11 @@ builder.Services.AddControllersWithViews(options =>
 {
     options.Filters.Add<ApiExceptionFilter>();
     options.Filters.Add<ValidateAntiforgeryApiFilter>();
+})
+.AddJsonOptions(options =>
+{
+    // 允许以字符串形式绑定枚举（如 "DingTalk"、"Ratio"），同时保留数值（allowIntegerValues）。
+    options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 builder.Services.AddScoped<ApiExceptionFilter>();
 builder.Services.AddScoped<ValidateAntiforgeryApiFilter>();

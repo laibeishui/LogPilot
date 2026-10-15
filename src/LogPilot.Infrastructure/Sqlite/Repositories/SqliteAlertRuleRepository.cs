@@ -58,13 +58,13 @@ public sealed class SqliteAlertRuleRepository : IAlertRuleRepository
                 service_name, environment, levels, keyword, exception_type,
                 condition_type, threshold, window_minutes, for_minutes,
                 channel_ids, severity, cooldown_minutes, notify_recovery, repeat_minutes,
-                created_by, created_at, updated_at)
+                silence_until, created_by, created_at, updated_at)
             VALUES (
                 @ProjectId, @Name, @Description, @Enabled,
                 @ServiceName, @Environment, @Levels, @Keyword, @ExceptionType,
                 @ConditionType, @Threshold, @WindowMinutes, @ForMinutes,
                 @ChannelIds, @Severity, @CooldownMinutes, @NotifyRecovery, @RepeatMinutes,
-                @CreatedBy, @CreatedAt, @UpdatedAt);
+                @SilenceUntil, @CreatedBy, @CreatedAt, @UpdatedAt);
             SELECT last_insert_rowid();
             """,
             new
@@ -87,6 +87,7 @@ public sealed class SqliteAlertRuleRepository : IAlertRuleRepository
                 rule.CooldownMinutes,
                 NotifyRecovery = rule.NotifyRecovery ? 1 : 0,
                 rule.RepeatMinutes,
+                SilenceUntil = rule.SilenceUntil.HasValue ? SqliteTime.ToDb(rule.SilenceUntil.Value) : null,
                 rule.CreatedBy,
                 CreatedAt = SqliteTime.ToDb(rule.CreatedAt),
                 UpdatedAt = SqliteTime.ToDb(rule.UpdatedAt)
@@ -133,6 +134,21 @@ public sealed class SqliteAlertRuleRepository : IAlertRuleRepository
             });
     }
 
+    public async Task UpdateSilenceAsync(long id, DateTimeOffset? silenceUntil, CancellationToken cancellationToken = default)
+    {
+        await using var db = (SqliteConnection)await _connections.OpenConnectionAsync(cancellationToken);
+        await db.ExecuteAsync(
+            """
+            UPDATE lp_alert_rule SET silence_until = @SilenceUntil, updated_at = @UpdatedAt WHERE id = @Id;
+            """,
+            new
+            {
+                Id = id,
+                SilenceUntil = silenceUntil.HasValue ? SqliteTime.ToDb(silenceUntil.Value) : null,
+                UpdatedAt = SqliteTime.ToDb(DateTimeOffset.UtcNow)
+            });
+    }
+
     public async Task DeleteAsync(long id, CancellationToken cancellationToken = default)
     {
         await using var db = (SqliteConnection)await _connections.OpenConnectionAsync(cancellationToken);
@@ -142,12 +158,14 @@ public sealed class SqliteAlertRuleRepository : IAlertRuleRepository
     private static string ToDbCondition(AlertConditionType type) => type switch
     {
         AlertConditionType.Count => "count",
+        AlertConditionType.Ratio => "ratio",
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, null)
     };
 
     private static AlertConditionType FromDbCondition(string type) => type.ToLowerInvariant() switch
     {
         "count" => AlertConditionType.Count,
+        "ratio" => AlertConditionType.Ratio,
         _ => throw new InvalidOperationException($"Unknown alert condition type: {type}")
     };
 
@@ -188,6 +206,7 @@ public sealed class SqliteAlertRuleRepository : IAlertRuleRepository
         public int cooldown_minutes { get; init; }
         public int notify_recovery { get; init; }
         public int? repeat_minutes { get; init; }
+        public string? silence_until { get; init; }
         public long? created_by { get; init; }
         public string created_at { get; init; } = string.Empty;
         public string updated_at { get; init; } = string.Empty;
@@ -213,6 +232,7 @@ public sealed class SqliteAlertRuleRepository : IAlertRuleRepository
             CooldownMinutes = cooldown_minutes,
             NotifyRecovery = notify_recovery == 1,
             RepeatMinutes = repeat_minutes,
+            SilenceUntil = SqliteTime.FromDbNullable(silence_until),
             CreatedBy = created_by,
             CreatedAt = SqliteTime.FromDb(created_at),
             UpdatedAt = SqliteTime.FromDb(updated_at)

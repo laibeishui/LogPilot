@@ -162,9 +162,18 @@ public sealed class AlertRuleDto
 
     public int? RepeatMinutes { get; init; }
 
+    /// <summary>静默截止时间；早于该时间不发送通知。null 表示未静默。</summary>
+    public DateTimeOffset? SilenceUntil { get; init; }
+
     public required DateTimeOffset CreatedAt { get; init; }
 
     public required DateTimeOffset UpdatedAt { get; init; }
+}
+
+/// <summary>设置/取消规则静默期。Minutes 为 null 或 <=0 表示取消静默。</summary>
+public sealed class SilenceAlertRuleRequest
+{
+    public int? Minutes { get; init; }
 }
 
 // —— 事件 DTO ——

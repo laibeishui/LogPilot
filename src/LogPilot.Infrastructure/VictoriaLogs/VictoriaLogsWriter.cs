@@ -22,15 +22,18 @@ public sealed class VictoriaLogsWriter : ILogWriter
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly VictoriaLogsOptions _options;
+    private readonly ILogWriteMetrics _metrics;
     private readonly ILogger<VictoriaLogsWriter> _logger;
 
     public VictoriaLogsWriter(
         IHttpClientFactory httpClientFactory,
         IOptions<StorageOptions> options,
+        ILogWriteMetrics metrics,
         ILogger<VictoriaLogsWriter> logger)
     {
         _httpClientFactory = httpClientFactory;
         _options = options.Value.VictoriaLogs;
+        _metrics = metrics;
         _logger = logger;
     }
 
@@ -63,6 +66,7 @@ public sealed class VictoriaLogsWriter : ILogWriter
             using var response = await client.PostAsync(path, content, cancellationToken).ConfigureAwait(false);
             if (response.IsSuccessStatusCode)
             {
+                _metrics.RecordSuccess();
                 return LogWriteResult.Success(logs.Count);
             }
 
@@ -72,18 +76,20 @@ public sealed class VictoriaLogsWriter : ILogWriter
                 (int)response.StatusCode,
                 Truncate(body));
 
+            var reason = $"VictoriaLogs returned {(int)response.StatusCode}";
+            _metrics.RecordFailure(logs.Count, reason);
             var retryable = (int)response.StatusCode is 429 or >= 500;
-            return LogWriteResult.Failure(
-                $"VictoriaLogs returned {(int)response.StatusCode}",
-                retryable);
+            return LogWriteResult.Failure(reason, retryable);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            _metrics.RecordFailure(logs.Count, "VictoriaLogs write timeout");
             return LogWriteResult.Failure("VictoriaLogs write timeout", retryable: true);
         }
         catch (HttpRequestException ex)
         {
             _logger.LogWarning(ex, "VictoriaLogs unreachable. BaseUrl={BaseUrl}", _options.BaseUrl);
+            _metrics.RecordFailure(logs.Count, "VictoriaLogs unreachable");
             return LogWriteResult.Failure("VictoriaLogs unreachable", retryable: true);
         }
     }

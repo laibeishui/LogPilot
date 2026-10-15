@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using LogPilot.Core.Abstractions;
@@ -210,6 +211,102 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
         }
     }
 
+    public async Task<IReadOnlyList<LogSearchItem>> ListErrorSamplesAsync(
+        long projectId,
+        DateTimeOffset startTime,
+        DateTimeOffset endTime,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        var logsQl = LogsQlBuilder.BuildErrorSamples(projectId, startTime, endTime, limit);
+        try
+        {
+            var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
+            return rows
+                .Select(MapSearchItem)
+                .Where(x => x is not null)
+                .Cast<LogSearchItem>()
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list error samples for project {ProjectId}", projectId);
+            return Array.Empty<LogSearchItem>();
+        }
+    }
+
+    public async IAsyncEnumerable<LogSearchItem> TailAsync(
+        long projectId,
+        IReadOnlyList<string> services,
+        IReadOnlyList<string> levels,
+        string? keyword,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var logsQl = LogsQlBuilder.BuildTail(projectId, services, levels, keyword);
+        var client = _httpClientFactory.CreateClient("VictoriaLogs");
+
+        using var content = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["query"] = logsQl
+        });
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded");
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "select/logsql/tail")
+        {
+            Content = content
+        };
+
+        // ResponseHeadersRead：仅等待响应头，之后长连接持续读取，不受 HttpClient.Timeout 限制
+        using var response = await client
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogWarning(
+                "VictoriaLogs tail failed. Status={Status} Body={Body}",
+                (int)response.StatusCode,
+                Truncate(body));
+            yield break;
+        }
+
+        await using var stream = await response.Content
+            .ReadAsStreamAsync(cancellationToken)
+            .ConfigureAwait(false);
+        using var reader = new StreamReader(stream);
+
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            if (line is null)
+            {
+                yield break;
+            }
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            LogSearchItem? item = null;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                item = MapSearchItem(doc.RootElement);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            if (item is not null)
+            {
+                yield return item;
+            }
+        }
+    }
+
     private static string? FindTimeBucketField(JsonElement row)
     {
         // VictoriaLogs stats by (_time:5m) 返回 "_time" 字段
@@ -384,7 +481,8 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
             ServiceName = service,
             Level = level,
             Message = message,
-            TraceId = GetString(row, "trace_id")
+            TraceId = GetString(row, "trace_id"),
+            ExceptionType = GetString(row, "exception_type")
         };
     }
 

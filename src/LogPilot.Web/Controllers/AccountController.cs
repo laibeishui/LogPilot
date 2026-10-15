@@ -20,8 +20,4 @@ public sealed class AccountController : Controller
 
         return View();
     }
-
-    [Authorize]
-    [HttpGet("logout")]
-    public IActionResult LogoutPage() => View("Logout");
 }

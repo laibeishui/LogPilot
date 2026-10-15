@@ -29,6 +29,7 @@
         <option value="firing">触发中</option>
         <option value="acknowledged">已确认</option>
         <option value="resolved">已恢复</option>
+        <option value="silenced">已静默</option>
       </select>
       <button class="btn" id="btnRefreshEvents" type="button">刷新</button>
       <button class="btn" id="btnLoadMoreEvents" type="button" style="display:none">加载更早</button>
@@ -147,9 +148,18 @@
       </div>
       <div class="rows">
         <div>
-          <label class="muted" for="ruleThreshold">阈值 *</label>
+          <label class="muted" for="ruleConditionType">条件类型</label>
+          <select id="ruleConditionType" class="field">
+            <option value="Count">日志条数</option>
+            <option value="Ratio">错误占比（%）</option>
+          </select>
+        </div>
+        <div>
+          <label class="muted" for="ruleThreshold" id="ruleThresholdLabel">阈值（条数）*</label>
           <input id="ruleThreshold" class="field" type="number" min="1" value="10" />
         </div>
+      </div>
+      <div class="rows">
         <div>
           <label class="muted" for="ruleWindow">时间窗口（分钟）*</label>
           <input id="ruleWindow" class="field" type="number" min="1" max="1440" value="5" />
@@ -254,6 +264,7 @@
   .status-firing { color:var(--red); }
   .status-acknowledged { color:var(--orange); }
   .status-resolved { color:var(--green); }
+  .status-silenced { color:var(--muted); }
 </style>
 
 @section Scripts {
@@ -335,7 +346,7 @@
       const tbody = $('eventsBody');
       const rows = (result.items || []).map(e => `
         <tr>
-          <td class="status-${e.status}">${e.status === 'firing' ? '🔴 触发中' : e.status === 'acknowledged' ? '🟡 已确认' : '🟢 已恢复'}</td>
+          <td class="status-${e.status}">${e.status === 'firing' ? '🔴 触发中' : e.status === 'acknowledged' ? '🟡 已确认' : e.status === 'silenced' ? '🔕 已静默' : '🟢 已恢复'}</td>
           <td class="sev-${e.severity}">${e.severity}</td>
           <td>${escapeHtml(e.title)}<br><span class="muted" style="font-size:12px">${escapeHtml(e.message.split('\n')[0])}</span></td>
           <td>${escapeHtml(new Date(e.triggeredAt).toLocaleString())}</td>
@@ -380,23 +391,37 @@
   });
 
   // —— 告警规则 ——
+  function updateRuleThresholdLabel() {
+    const isRatio = $('ruleConditionType').value === 'Ratio';
+    $('ruleThresholdLabel').textContent = isRatio ? '阈值（错误占比 %）*' : '阈值（条数）*';
+    $('ruleThreshold').max = isRatio ? '100' : '';
+  }
+
+  $('ruleConditionType').addEventListener('change', updateRuleThresholdLabel);
+
   async function loadRules() {
     if (!currentProjectId) return;
     try {
       const rules = await LogPilotApi.api('/api/v1/alerts/projects/' + currentProjectId + '/rules');
-      $('rulesBody').innerHTML = rules.map(r => `
+      $('rulesBody').innerHTML = rules.map(r => {
+        const isRatio = (r.conditionType || '').toLowerCase() === 'ratio';
+        const silenced = r.silenceUntil && new Date(r.silenceUntil) > new Date();
+        return `
         <tr>
           <td>${escapeHtml(r.name)}</td>
-          <td>${r.conditionType}${r.levels?.length ? ' [' + r.levels.join(',') + ']' : ''}${r.keyword ? ' 含:' + escapeHtml(r.keyword) : ''}</td>
-          <td>≥ ${r.threshold}</td>
+          <td>${isRatio ? '错误占比' : '日志条数'}${r.levels?.length ? ' [' + r.levels.join(',') + ']' : ''}${r.keyword ? ' 含:' + escapeHtml(r.keyword) : ''}</td>
+          <td>${isRatio ? '≥ ' + r.threshold + '%' : '≥ ' + r.threshold}</td>
           <td>${r.windowMinutes} 分钟</td>
           <td class="sev-${r.severity}">${r.severity}</td>
-          <td>${r.enabled ? '启用' : '停用'}</td>
+          <td>${r.enabled ? '启用' : '停用'}${silenced ? ` <span class="status-silenced">（静默至 ${escapeHtml(new Date(r.silenceUntil).toLocaleString())}）</span>` : ''}</td>
           <td>
             <button class="btn" data-edit-rule="${r.id}" type="button">编辑</button>
+            ${silenced
+              ? `<button class="btn" data-unsilence-rule="${r.id}" type="button">取消静默</button>`
+              : `<button class="btn" data-silence-rule="${r.id}" type="button">静默</button>`}
             <button class="btn" data-del-rule="${r.id}" type="button">删除</button>
           </td>
-        </tr>`).join('') || '<tr><td colspan="7" class="muted">暂无规则</td></tr>';
+        </tr>`; }).join('') || '<tr><td colspan="7" class="muted">暂无规则</td></tr>';
     } catch (e) {
       showNotice('加载规则失败: ' + e.message, true);
     }
@@ -422,7 +447,9 @@
     $('ruleSeverity').value = 'P2';
     $('ruleLevels').value = 'ERROR,FATAL';
     $('ruleKeyword').value = '';
+    $('ruleConditionType').value = 'Count';
     $('ruleThreshold').value = '10';
+    updateRuleThresholdLabel();
     $('ruleWindow').value = '5';
     $('ruleCooldown').value = '5';
     $('ruleRepeat').value = '';
@@ -445,6 +472,8 @@
         $('ruleSeverity').value = rule.severity;
         $('ruleLevels').value = (rule.levels || []).join(',');
         $('ruleKeyword').value = rule.keyword || '';
+        $('ruleConditionType').value = (rule.conditionType || 'count').toLowerCase() === 'ratio' ? 'Ratio' : 'Count';
+        updateRuleThresholdLabel();
         $('ruleThreshold').value = rule.threshold;
         $('ruleWindow').value = rule.windowMinutes;
         $('ruleCooldown').value = rule.cooldownMinutes;
@@ -466,6 +495,26 @@
         loadRules();
       } catch (err) { showNotice(err.message, true); }
     }
+    const silenceId = e.target.getAttribute('data-silence-rule');
+    const unsilenceId = e.target.getAttribute('data-unsilence-rule');
+    if (silenceId) {
+      const input = prompt('静默时长（分钟，期间不发送任何通知）', '60');
+      if (input === null) return;
+      const minutes = Number(input);
+      if (!minutes || minutes <= 0) { showNotice('静默时长必须大于 0', true); return; }
+      try {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/rules/${silenceId}/silence`, { method: 'POST', body: { minutes } });
+        showNotice(`已静默 ${minutes} 分钟`);
+        loadRules();
+      } catch (err) { showNotice(err.message, true); }
+    }
+    if (unsilenceId) {
+      try {
+        await LogPilotApi.api(`/api/v1/alerts/projects/${currentProjectId}/rules/${unsilenceId}/silence`, { method: 'POST', body: { minutes: 0 } });
+        showNotice('已取消静默');
+        loadRules();
+      } catch (err) { showNotice(err.message, true); }
+    }
   });
 
   $('btnSaveRule').addEventListener('click', async () => {
@@ -473,7 +522,9 @@
     if (!name) { showNotice('规则名称必填', true); return; }
     const threshold = Number($('ruleThreshold').value);
     const windowMinutes = Number($('ruleWindow').value);
+    const conditionType = $('ruleConditionType').value;
     if (!threshold || threshold <= 0) { showNotice('阈值必须大于 0', true); return; }
+    if (conditionType === 'Ratio' && threshold > 100) { showNotice('占比阈值必须在 1~100 之间', true); return; }
     if (!windowMinutes || windowMinutes <= 0) { showNotice('时间窗口必须大于 0', true); return; }
     const channelIds = Array.from(document.querySelectorAll('#ruleChannelsCheckboxes input:checked')).map(cb => Number(cb.value));
     if (channelIds.length === 0) { showNotice('至少选择一个通知渠道', true); return; }
@@ -486,7 +537,7 @@
       severity: $('ruleSeverity').value,
       levels: levels.length ? levels : null,
       keyword: $('ruleKeyword').value.trim() || null,
-      conditionType: 'Count',
+      conditionType,
       threshold,
       windowMinutes,
       cooldownMinutes: Number($('ruleCooldown').value) || 5,

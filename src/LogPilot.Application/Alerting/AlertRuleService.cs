@@ -17,6 +17,8 @@ public interface IAlertRuleService
 
     Task<AlertRuleDto> UpdateAsync(long userId, bool isSystemAdmin, long projectId, long ruleId, UpdateAlertRuleRequest request, CancellationToken cancellationToken = default);
 
+    Task<AlertRuleDto> SetSilenceAsync(long userId, bool isSystemAdmin, long projectId, long ruleId, int? minutes, CancellationToken cancellationToken = default);
+
     Task DeleteAsync(long userId, bool isSystemAdmin, long projectId, long ruleId, CancellationToken cancellationToken = default);
 }
 
@@ -60,7 +62,14 @@ public sealed class AlertRuleService : IAlertRuleService
             throw new AppException("INVALID_ARGUMENT", "规则名称必填且不超过 100 字符。");
         }
 
-        if (request.Threshold <= 0)
+        if (request.ConditionType == AlertConditionType.Ratio)
+        {
+            if (request.Threshold is <= 0 or > 100)
+            {
+                throw new AppException("INVALID_ARGUMENT", "占比阈值必须在 1~100 之间。");
+            }
+        }
+        else if (request.Threshold <= 0)
         {
             throw new AppException("INVALID_ARGUMENT", "阈值必须大于 0。");
         }
@@ -125,8 +134,16 @@ public sealed class AlertRuleService : IAlertRuleService
             throw new AppException("INVALID_ARGUMENT", "规则名称必填且不超过 100 字符。");
         }
 
+        var conditionType = request.ConditionType ?? existing.ConditionType;
         var threshold = request.Threshold ?? existing.Threshold;
-        if (threshold <= 0)
+        if (conditionType == AlertConditionType.Ratio)
+        {
+            if (threshold is <= 0 or > 100)
+            {
+                throw new AppException("INVALID_ARGUMENT", "占比阈值必须在 1~100 之间。");
+            }
+        }
+        else if (threshold <= 0)
         {
             throw new AppException("INVALID_ARGUMENT", "阈值必须大于 0。");
         }
@@ -173,7 +190,7 @@ public sealed class AlertRuleService : IAlertRuleService
             Levels = request.Levels is null ? existing.Levels : (request.Levels.Count > 0 ? JsonSerializer.Serialize(request.Levels) : null),
             Keyword = request.Keyword is null ? existing.Keyword : (string.IsNullOrWhiteSpace(request.Keyword) ? null : request.Keyword.Trim()),
             ExceptionType = request.ExceptionType is null ? existing.ExceptionType : (string.IsNullOrWhiteSpace(request.ExceptionType) ? null : request.ExceptionType.Trim()),
-            ConditionType = request.ConditionType ?? existing.ConditionType,
+            ConditionType = conditionType,
             Threshold = threshold,
             WindowMinutes = windowMinutes,
             ForMinutes = request.ForMinutes ?? existing.ForMinutes,
@@ -182,12 +199,27 @@ public sealed class AlertRuleService : IAlertRuleService
             CooldownMinutes = request.CooldownMinutes ?? existing.CooldownMinutes,
             NotifyRecovery = request.NotifyRecovery ?? existing.NotifyRecovery,
             RepeatMinutes = request.RepeatMinutes,
+            SilenceUntil = existing.SilenceUntil,
             CreatedBy = existing.CreatedBy,
             CreatedAt = existing.CreatedAt,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
         await _rules.UpdateAsync(updated, cancellationToken).ConfigureAwait(false);
+        var refreshed = await _rules.FindByIdAsync(ruleId, cancellationToken).ConfigureAwait(false);
+        return Map(refreshed!);
+    }
+
+    public async Task<AlertRuleDto> SetSilenceAsync(long userId, bool isSystemAdmin, long projectId, long ruleId, int? minutes, CancellationToken cancellationToken = default)
+    {
+        await _access.EnsureCanManageAsync(userId, isSystemAdmin, projectId, cancellationToken).ConfigureAwait(false);
+        await GetRuleOrThrow(ruleId, projectId, cancellationToken);
+
+        DateTimeOffset? silenceUntil = minutes is > 0
+            ? DateTimeOffset.UtcNow.AddMinutes(minutes.Value)
+            : null;
+
+        await _rules.UpdateSilenceAsync(ruleId, silenceUntil, cancellationToken).ConfigureAwait(false);
         var refreshed = await _rules.FindByIdAsync(ruleId, cancellationToken).ConfigureAwait(false);
         return Map(refreshed!);
     }
@@ -231,6 +263,7 @@ public sealed class AlertRuleService : IAlertRuleService
         CooldownMinutes = r.CooldownMinutes,
         NotifyRecovery = r.NotifyRecovery,
         RepeatMinutes = r.RepeatMinutes,
+        SilenceUntil = r.SilenceUntil,
         CreatedAt = r.CreatedAt,
         UpdatedAt = r.UpdatedAt
     };

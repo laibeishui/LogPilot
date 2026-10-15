@@ -16,6 +16,9 @@ public sealed class LogQueryService : ILogQueryService
         "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"
     ];
 
+    /// <summary>异常聚合时参与指纹计算的错误样本上限。</summary>
+    private const int ErrorSampleLimit = 1000;
+
     private readonly ILogSearcher _searcher;
     private readonly IProjectAccessService _access;
     private readonly QueryLimits _limits;
@@ -138,6 +141,62 @@ public sealed class LogQueryService : ILogQueryService
         };
     }
 
+    public async Task<LogContextDto> GetContextAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        DateTimeOffset? timestamp,
+        int? beforeMinutes,
+        int? afterMinutes,
+        int? limit,
+        CancellationToken cancellationToken = default)
+    {
+        if (projectId <= 0)
+        {
+            throw new AppException("INVALID_ARGUMENT", "projectId 必填。");
+        }
+
+        await _access.EnsureCanViewAsync(userId, isSystemAdmin, projectId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var anchor = (timestamp ?? DateTimeOffset.UtcNow).ToUniversalTime();
+        var before = Math.Clamp(beforeMinutes ?? 5, 1, 120);
+        var after = Math.Clamp(afterMinutes ?? 5, 1, 120);
+        var take = Math.Clamp(limit ?? 20, 1, 50);
+
+        var beforeTask = _searcher.SearchAsync(
+            new AuthorizedLogQuery
+            {
+                ProjectId = projectId,
+                StartTime = anchor.AddMinutes(-before),
+                EndTime = anchor,
+                PageSize = take
+            },
+            cancellationToken);
+
+        var afterTask = _searcher.SearchAsync(
+            new AuthorizedLogQuery
+            {
+                ProjectId = projectId,
+                StartTime = anchor,
+                EndTime = anchor.AddMinutes(after),
+                PageSize = take
+            },
+            cancellationToken);
+
+        await Task.WhenAll(beforeTask, afterTask).ConfigureAwait(false);
+
+        var items = beforeTask.Result.Items
+            .Concat(afterTask.Result.Items)
+            .GroupBy(x => x.Id)
+            .Select(g => g.First())
+            .OrderBy(x => x.Timestamp)
+            .Select(MapItem)
+            .ToList();
+
+        return new LogContextDto { Items = items };
+    }
+
     public async Task<StatsOverviewDto> GetOverviewAsync(
         long userId,
         bool isSystemAdmin,
@@ -220,6 +279,108 @@ public sealed class LogQueryService : ILogQueryService
         };
     }
 
+    public async Task<StatsExceptionsDto> GetExceptionsAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        DateTimeOffset? startTime,
+        DateTimeOffset? endTime,
+        int? top,
+        CancellationToken cancellationToken = default)
+    {
+        if (projectId <= 0)
+        {
+            throw new AppException("INVALID_ARGUMENT", "projectId 必填。");
+        }
+
+        await _access.EnsureCanViewAsync(userId, isSystemAdmin, projectId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var (start, end) = ResolveRange(startTime, endTime);
+        var take = Math.Clamp(top ?? 20, 1, 100);
+        var samples = await _searcher
+            .ListErrorSamplesAsync(projectId, start, end, ErrorSampleLimit, cancellationToken)
+            .ConfigureAwait(false);
+
+        var groups = samples
+            .GroupBy(s => ExceptionFingerprint.Compute(s.ServiceName, s.Level, s.ExceptionType, s.Message))
+            .Select(g =>
+            {
+                var latest = g.OrderByDescending(x => x.Timestamp).First();
+                return new ExceptionGroupDto
+                {
+                    Fingerprint = g.Key,
+                    Title = BuildTitle(latest),
+                    ServiceName = latest.ServiceName,
+                    Level = latest.Level,
+                    Count = g.LongCount(),
+                    FirstSeen = g.Min(x => x.Timestamp),
+                    LastSeen = g.Max(x => x.Timestamp),
+                    SampleMessage = latest.Message,
+                    SampleTraceId = latest.TraceId,
+                    ExceptionType = latest.ExceptionType
+                };
+            })
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.LastSeen)
+            .Take(take)
+            .ToList();
+
+        return new StatsExceptionsDto
+        {
+            StartTime = start,
+            EndTime = end,
+            Scanned = samples.Count,
+            Truncated = samples.Count >= ErrorSampleLimit,
+            Groups = groups
+        };
+    }
+
+    public async IAsyncEnumerable<LogSearchItemDto> TailAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        string? service,
+        string? level,
+        string? keyword,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (projectId <= 0)
+        {
+            throw new AppException("INVALID_ARGUMENT", "projectId 必填。");
+        }
+
+        await _access.EnsureCanViewAsync(userId, isSystemAdmin, projectId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var services = NormalizeList(service is null ? null : new[] { service });
+        var levels = NormalizeList(level is null ? null : new[] { level });
+        var keywordFilter = TrimToNull(keyword);
+
+        await foreach (var item in _searcher
+            .TailAsync(projectId, services, levels, keywordFilter, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            yield return MapItem(item);
+        }
+    }
+
+    private static string BuildTitle(LogSearchItem item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.ExceptionType))
+        {
+            return item.ExceptionType!;
+        }
+
+        var firstLine = item.Message.Split('\n', 2)[0].Trim();
+        if (firstLine.Length == 0)
+        {
+            return "(无消息)";
+        }
+
+        return firstLine.Length <= 120 ? firstLine : firstLine[..120];
+    }
+
     private static string NormalizeInterval(string? interval)
     {
         if (string.IsNullOrWhiteSpace(interval))
@@ -292,7 +453,8 @@ public sealed class LogQueryService : ILogQueryService
             ServiceName = item.ServiceName,
             Level = item.Level,
             Message = item.Message,
-            TraceId = item.TraceId
+            TraceId = item.TraceId,
+            ExceptionType = item.ExceptionType
         };
 
     private static LogDetailDto MapDetail(LogDetail detail)

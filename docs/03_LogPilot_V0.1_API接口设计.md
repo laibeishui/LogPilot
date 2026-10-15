@@ -3,21 +3,21 @@
 > 文档版本：V1.0（配套 LogPilot 技术方案 V2.7）  
 > 更新日期：2026-10-13  
 > 状态：开发设计基线，示例接口尚未实现  
-> 适用技术：ASP.NET Core 8 MVC + Web API、Dapper + SQLite、VictoriaLogs、Razor + Vue 3  
+> 适用技术：ASP.NET Core 8 MVC + Web API、Dapper + SQLite、VictoriaLogs、Razor + 原生 JS 渐进增强
 > 核心原则：轻量化、部署简单化、使用方便化；两个 Docker 容器，无 RabbitMQ。
 
 ## 1. 文档目标与范围
 
 本文定义 LogPilot V0.1 的外部接入、管理及查询 API，并约定鉴权、字段标准化、错误处理、分页、写入语义与测试验收。LogPilot 允许两种入口：
 
-1. **主要入口：OpenTelemetry SDK → OTLP/HTTP Protobuf**（`POST /v1/logs`）；适合 .NET、Java、Python、Go、Node.js 等长期运行的项目。日志由 SDK 异步批量导出。
+1. **主要入口：OpenTelemetry SDK → OTLP/HTTP Protobuf**（`POST /v1/logs`）；适合 .NET、Java、Python、Go、Node.js 等长期运行的项目。日志由 SDK 异步批量导出。同时接受 OTLP/HTTP JSON 编码（`Content-Type: application/json`），便于手工联调与不支持 Protobuf 的接入方。
 2. **辅助入口：HTTP JSON 批量 API**（`POST /api/v1/ingest/logs`）；适合脚本、旧应用与简单集成。客户端应自行处理批量、限速和重试。
 
 两者统一认证、校验、归一化及写入 VictoriaLogs。**V0.1 仅要求日志（Logs）信号**，不承诺 `/v1/traces`、`/v1/metrics` 或 OTLP/gRPC。
 
 ## 2. 系统边界
 
-- **LogPilot**：ASP.NET Core 8 单个进程，同时托管 MVC Razor 页面、Vue 静态脚本、JSON 管理 API、OTLP 接入、后台告警任务；SQLite 保存项目、用户、密钥与配置。
+- **LogPilot**：ASP.NET Core 8 单个进程，同时托管 MVC Razor 页面、静态资源与脚本、JSON 管理 API、OTLP 接入、后台告警任务；SQLite 保存项目、用户、密钥与配置。
 - **VictoriaLogs**：第二个容器，提供真正的日志存储与 LogsQL 查询；在私有 Docker 网络中访问，**不对公网暴露 VictoriaLogs 管理/查询端口**。
 - **客户端**：使用 SDK 或 HTTP 请求，不要求安装 RabbitMQ、Kafka、Redis 等中间件。
 
@@ -96,6 +96,7 @@ Content-Encoding: gzip
 ```
 
 - 请求体为 **`ExportLogsServiceRequest` 二进制 Protobuf**，采用 OpenTelemetry 官方 proto 定义；不能简单把自定义 JSON 序列化为 Protobuf 就当成 OTLP。
+- 同时接受 **OTLP JSON 编码**：`Content-Type: application/json` 时按 `ExportLogsServiceRequest` 的 JSON 形式解析，字段映射、批量与响应语义与 Protobuf 一致，响应体按请求编码返回。
 - 支持原始 Protobuf，gzip 作为可选压缩；解压后仍检查大小限制，防止压缩炸弹。
 - 默认接收端口可直接使用 LogPilot 的 HTTPS 端口；**不强制另外开放 4318**。若要与 OTLP 默认端口兼容，可以在配置中映射 `4318` 到同一 ASP.NET Core 服务。
 - SDK 指定完整地址 `https://logs.example.com/v1/logs` 或按 SDK 语义使用 OTLP 基础地址与 Logs 路径。
@@ -294,7 +295,11 @@ Content-Type: application/json
 | `GET` | `/api/v1/logs/filters` | 服务、级别等筛选候选值 |
 | `GET` | `/api/v1/stats/overview` | 总量、错误数等概览 |
 | `GET` | `/api/v1/stats/trend` | 时间段聚合趋势 |
-| `GET` | `/api/v1/logs/tail` | V0.2 规划：SSE 实时日志 |
+| `GET` | `/api/v1/stats/exceptions` | 异常指纹聚合：错误日志按指纹归并为「问题」列表 |
+| `GET` | `/api/v1/logs/tail` | SSE 实时日志（`text/event-stream`，前端用 `EventSource` 订阅） |
+
+> `stats/*` 与 `logs/tail` 均需登录态，并强制 `projectId` 过滤与时间窗限制。
+> `logs/tail` 在连接期间按 `event: log` 推送新日志，客户端断开即释放订阅。
 
 ### 9.2 日志搜索请求
 
@@ -475,13 +480,13 @@ graph TD
 4. 实现 `POST /api/v1/ingest/logs` JSON 批量 API。
 5. 实现 `POST /v1/logs`，解析标准 OTLP Protobuf，确保响应兼容。
 6. 实现项目管理 API 和日志查询/详情 API。
-7. 用 MVC + Vue 3 接入搜索页、筛选器、详情抽屉。
+7. 用 MVC + 原生 JS（渐进增强）接入搜索页、筛选器、详情抽屉。
 8. 实现请求限流、故障监测和 API 文档示例。
 9. 以 .NET、Java、Python 至少三种客户端完成跨语言联调，并测试高频写入与中文搜索。
 
 ## 15. 决策记录与待验证事项
 
-**已决策**：双 Docker 容器；ASP.NET Core 8 MVC + Web API；Vue 3 渐进式；Dapper + SQLite；VictoriaLogs；SDK/OTLP Protobuf 为主，HTTP JSON 批量为辅；不引入 RabbitMQ。
+**已决策**：双 Docker 容器；ASP.NET Core 8 MVC + Web API；Razor + 原生 JS 渐进增强（不强制前端框架）；Dapper + SQLite；VictoriaLogs；SDK/OTLP Protobuf 为主，HTTP JSON 批量为辅；不引入 RabbitMQ。
 
 **实现前必须验证**：
 
@@ -543,6 +548,7 @@ graph TD
 | GET | `/api/v1/alerts/projects/{projectId}/rules/{ruleId}` | 规则详情 |
 | PATCH | `/api/v1/alerts/projects/{projectId}/rules/{ruleId}` | 更新规则 |
 | DELETE | `/api/v1/alerts/projects/{projectId}/rules/{ruleId}` | 删除规则 |
+| POST | `/api/v1/alerts/projects/{projectId}/rules/{ruleId}/silence` | 设置/取消规则静默期 |
 
 **创建规则请求体**：
 ```json
@@ -564,11 +570,23 @@ graph TD
 ```
 
 **字段说明**：
-- `conditionType`：V0.2 仅支持 `Count`（X 分钟内匹配日志数 ≥ 阈值）
+- `conditionType`：`Count`（X 分钟内匹配日志数 ≥ 阈值）或 `Ratio`（匹配日志占同服务范围全部日志的百分比 ≥ 阈值）
+- `threshold`：`Count` 时为条数（> 0）；`Ratio` 时为百分比（1~100）
 - `windowMinutes`：评估窗口（1~1440 分钟）
 - `cooldownMinutes`：触发后冷却时间，期间不重复通知
 - `repeatMinutes`：持续未恢复时的重发间隔；`null` 表示不重发
 - `channelIds`：通知渠道 ID 列表（必须属于同一项目）
+
+**设置静默请求体**：
+```json
+{
+  "minutes": 30
+}
+```
+
+**字段说明**：
+- `minutes`：静默时长（分钟）；`null` 或 `<= 0` 表示取消静默
+- 静默期内规则命中不发送通知，事件被标记为 `silenced`；静默结束后重新命中则回到 `firing` 并恢复通知
 
 ### 17.3 告警事件
 
@@ -578,16 +596,18 @@ graph TD
 | POST | `/api/v1/alerts/projects/{projectId}/events/{eventId}/acknowledge` | 确认告警 |
 | POST | `/api/v1/alerts/projects/{projectId}/events/{eventId}/resolve` | 标记恢复 |
 
-**事件状态**：`firing`（触发中）、`acknowledged`（已确认）、`resolved`（已恢复）。
+**事件状态**：`firing`（触发中）、`acknowledged`（已确认）、`silenced`（静默期内命中，未发通知）、`resolved`（已恢复）。
 
 ### 17.4 评估引擎
 
 - 后台 `BackgroundService` 每 30 秒轮询所有启用规则，查询 VictoriaLogs 统计匹配日志数
+- `Count` 规则比较匹配条数；`Ratio` 规则以同服务范围的全部日志数为分母，计算匹配占比后再比较阈值
 - 命中阈值 → 创建/更新 firing 事件 → 通过渠道发送通知
 - 条件不再满足 → 标记 resolved → 发送恢复通知（若 `notifyRecovery=true`）
 - 冷却与重发：同事件在 `cooldownMinutes` 内不重发；配置了 `repeatMinutes` 则按间隔重发
+- 静默期：规则处于静默期内时只更新事件状态、不发送通知；恢复通知同样被抑制
 - 健康检查：`/health/ready` 返回评估引擎最近运行状态（超过 2 分钟无成功运行标为 Unhealthy）
 
 ---
 
-**下一份文档**：`04_LogPilot_项目结构与开发规范.md`。该文档将明确 .NET 工程目录、MVC 与 API Controller 组织方式、Dapper 数据访问、Vue 页面组织、依赖注入、测试及提交规范。
+**下一份文档**：`04_LogPilot_项目结构与开发规范.md`。该文档将明确 .NET 工程目录、MVC 与 API Controller 组织方式、Dapper 数据访问、前端页面组织、依赖注入、测试及提交规范。

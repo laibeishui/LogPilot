@@ -178,6 +178,58 @@ public static class LogsQlBuilder
         return "5m";
     }
 
+    /// <summary>
+    /// 构造错误样本查询：仅 ERROR/FATAL，按时间降序取前 limit 条，用于异常指纹聚合。
+    /// </summary>
+    public static string BuildErrorSamples(long projectId, DateTimeOffset start, DateTimeOffset end, int limit)
+    {
+        var sb = new StringBuilder();
+        AppendTimeRange(sb, start, end);
+        sb.Append(' ');
+        AppendStreamFilter(sb, projectId, Array.Empty<string>());
+        sb.Append(" (level:ERROR OR level:FATAL)");
+        sb.Append(" | sort by (_time desc) | limit ")
+            .Append(Math.Clamp(limit, 1, 1000).ToString(CultureInfo.InvariantCulture));
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// 构造实时跟随（tail）查询：仅按项目/服务/级别/关键字过滤，不限定时间窗与排序。
+    /// </summary>
+    public static string BuildTail(
+        long projectId,
+        IReadOnlyList<string> services,
+        IReadOnlyList<string> levels,
+        string? keyword)
+    {
+        var sb = new StringBuilder();
+        AppendStreamFilter(sb, projectId, services);
+
+        var validLevels = levels
+            .Select(x => x.Trim().ToUpperInvariant())
+            .Where(AllowedLevels.Contains)
+            .Distinct()
+            .ToList();
+
+        if (validLevels.Count == 1)
+        {
+            sb.Append(" level:").Append(validLevels[0]);
+        }
+        else if (validLevels.Count > 1)
+        {
+            sb.Append(" (");
+            sb.Append(string.Join(" OR ", validLevels.Select(l => "level:" + l)));
+            sb.Append(')');
+        }
+
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            sb.Append(' ').Append(Quote(keyword.Trim()));
+        }
+
+        return sb.ToString();
+    }
+
     private static void AppendTimeRange(StringBuilder sb, DateTimeOffset start, DateTimeOffset end)
     {
         // [start, end) — end 已由游标/请求规范化

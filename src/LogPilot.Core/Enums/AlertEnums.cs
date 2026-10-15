@@ -12,11 +12,13 @@ public enum AlertChannelType
 }
 
 /// <summary>
-/// 告警条件类型。V0.2 先支持 count。
+/// 告警条件类型。
+/// Count：匹配日志条数；Ratio：匹配日志占同范围全部日志的百分比。
 /// </summary>
 public enum AlertConditionType
 {
-    Count = 0
+    Count = 0,
+    Ratio = 1
 }
 
 /// <summary>

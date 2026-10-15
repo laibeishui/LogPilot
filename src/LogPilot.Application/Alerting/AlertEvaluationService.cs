@@ -114,7 +114,7 @@ public sealed class AlertEvaluationService : BackgroundService
         var start = end.AddMinutes(-rule.WindowMinutes);
 
         var levels = ParseLevels(rule.Levels);
-        var count = await searcher.CountAsync(
+        var matched = await searcher.CountAsync(
             rule.ProjectId,
             start,
             end,
@@ -124,7 +124,32 @@ public sealed class AlertEvaluationService : BackgroundService
             rule.ExceptionType,
             cancellationToken).ConfigureAwait(false);
 
-        var isFiring = count >= rule.Threshold;
+        long value;
+        bool isFiring;
+        if (rule.ConditionType == AlertConditionType.Ratio)
+        {
+            // 分母：同一服务范围内全部日志（忽略级别/关键词/异常类型过滤）
+            var total = await searcher.CountAsync(
+                rule.ProjectId,
+                start,
+                end,
+                rule.ServiceName,
+                Array.Empty<string>(),
+                null,
+                null,
+                cancellationToken).ConfigureAwait(false);
+
+            var percent = total > 0 ? matched * 100d / total : 0d;
+            value = (long)Math.Round(percent);
+            isFiring = total > 0 && percent >= rule.Threshold;
+        }
+        else
+        {
+            value = matched;
+            isFiring = matched >= rule.Threshold;
+        }
+
+        var silenced = rule.SilenceUntil.HasValue && now < rule.SilenceUntil.Value;
         var fingerprint = BuildFingerprint(rule);
 
         var existingEvent = await eventRepo.FindActiveByFingerprintAsync(rule.Id, fingerprint, cancellationToken)
@@ -132,12 +157,12 @@ public sealed class AlertEvaluationService : BackgroundService
 
         if (isFiring)
         {
-            await HandleFiringAsync(rule, existingEvent, count, fingerprint, now, eventRepo, channelRepo, dispatcher, projectRepo, cancellationToken)
+            await HandleFiringAsync(rule, existingEvent, value, fingerprint, silenced, now, eventRepo, channelRepo, dispatcher, projectRepo, cancellationToken)
                 .ConfigureAwait(false);
         }
         else if (existingEvent is not null && existingEvent.Status != AlertEventStatus.Resolved)
         {
-            await HandleRecoveryAsync(rule, existingEvent, now, eventRepo, channelRepo, dispatcher, projectRepo, cancellationToken)
+            await HandleRecoveryAsync(rule, existingEvent, silenced, now, eventRepo, channelRepo, dispatcher, projectRepo, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -145,8 +170,9 @@ public sealed class AlertEvaluationService : BackgroundService
     private async Task HandleFiringAsync(
         AlertRule rule,
         AlertEvent? existingEvent,
-        long count,
+        long value,
         string fingerprint,
+        bool silenced,
         DateTimeOffset now,
         IAlertEventRepository eventRepo,
         IAlertChannelRepository channelRepo,
@@ -157,12 +183,44 @@ public sealed class AlertEvaluationService : BackgroundService
         var project = await projectRepo.FindByIdAsync(rule.ProjectId, cancellationToken).ConfigureAwait(false);
         var projectName = project?.Name ?? $"项目#{rule.ProjectId}";
 
+        // 静默期内不发送任何通知，仅记录/标记事件状态。
+        if (silenced)
+        {
+            if (existingEvent is null)
+            {
+                var muted = new AlertEvent
+                {
+                    RuleId = rule.Id,
+                    ProjectId = rule.ProjectId,
+                    Fingerprint = fingerprint,
+                    Status = AlertEventStatus.Silenced,
+                    Severity = rule.Severity,
+                    Title = BuildTitle(rule, value),
+                    Message = BuildMessage(rule, value, projectName),
+                    SampleLogsJson = JsonSerializer.Serialize(Array.Empty<SampleLog>()),
+                    TriggeredAt = now,
+                    LastNotifiedAt = null,
+                    NotifyCount = 0
+                };
+
+                await eventRepo.InsertOrUpdateAsync(muted, cancellationToken).ConfigureAwait(false);
+                _logger.LogInformation("Alert suppressed by silence: rule={RuleId} value={Value}", rule.Id, value);
+            }
+            else if (existingEvent.Status != AlertEventStatus.Silenced)
+            {
+                await eventRepo.UpdateStatusAsync(existingEvent.Id, AlertEventStatus.Silenced, null, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            return;
+        }
+
         if (existingEvent is null)
         {
             // 新告警
             var sampleLogs = await FetchSampleLogsAsync(rule, searcher: null!, cancellationToken); // 样本日志在通知时获取
-            var title = BuildTitle(rule, count);
-            var message = BuildMessage(rule, count, projectName);
+            var title = BuildTitle(rule, value);
+            var message = BuildMessage(rule, value, projectName);
 
             var alertEvent = new AlertEvent
             {
@@ -184,7 +242,7 @@ public sealed class AlertEvaluationService : BackgroundService
             await SendNotificationAsync(rule, alertEvent, projectName, channelRepo, dispatcher, cancellationToken)
                 .ConfigureAwait(false);
 
-            _logger.LogInformation("Alert fired: rule={RuleId} event={EventId} count={Count}", rule.Id, eventId, count);
+            _logger.LogInformation("Alert fired: rule={RuleId} event={EventId} value={Value}", rule.Id, eventId, value);
         }
         else
         {
@@ -222,7 +280,8 @@ public sealed class AlertEvaluationService : BackgroundService
                     RuleId = existingEvent.RuleId,
                     ProjectId = existingEvent.ProjectId,
                     Fingerprint = existingEvent.Fingerprint,
-                    Status = existingEvent.Status,
+                    // 静默期结束时把事件从 Silenced 恢复为 Firing
+                    Status = existingEvent.Status == AlertEventStatus.Silenced ? AlertEventStatus.Firing : existingEvent.Status,
                     Severity = existingEvent.Severity,
                     Title = existingEvent.Title,
                     Message = existingEvent.Message,
@@ -244,6 +303,7 @@ public sealed class AlertEvaluationService : BackgroundService
     private async Task HandleRecoveryAsync(
         AlertRule rule,
         AlertEvent existingEvent,
+        bool silenced,
         DateTimeOffset now,
         IAlertEventRepository eventRepo,
         IAlertChannelRepository channelRepo,
@@ -251,7 +311,7 @@ public sealed class AlertEvaluationService : BackgroundService
         IProjectRepository projectRepo,
         CancellationToken cancellationToken)
     {
-        if (!rule.NotifyRecovery)
+        if (!rule.NotifyRecovery || silenced)
         {
             await eventRepo.UpdateStatusAsync(existingEvent.Id, AlertEventStatus.Resolved, now, cancellationToken)
                 .ConfigureAwait(false);
@@ -367,21 +427,31 @@ public sealed class AlertEvaluationService : BackgroundService
         return Convert.ToHexString(hash)[..16].ToLowerInvariant();
     }
 
-    private static string BuildTitle(AlertRule rule, long count)
+    private static string BuildTitle(AlertRule rule, long value)
     {
         var scope = string.IsNullOrWhiteSpace(rule.ServiceName) ? "全部服务" : rule.ServiceName;
-        return $"[{rule.Severity}] {rule.Name}（{scope}）触发：{count} 条";
+        var metric = rule.ConditionType == AlertConditionType.Ratio ? $"错误占比 {value}%" : $"{value} 条";
+        return $"[{rule.Severity}] {rule.Name}（{scope}）触发：{metric}";
     }
 
-    private static string BuildMessage(AlertRule rule, long count, string projectName)
+    private static string BuildMessage(AlertRule rule, long value, string projectName)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"规则: {rule.Name}");
         sb.AppendLine($"项目: {projectName}");
         if (!string.IsNullOrWhiteSpace(rule.ServiceName))
             sb.AppendLine($"服务: {rule.ServiceName}");
-        sb.AppendLine($"条件: 最近 {rule.WindowMinutes} 分钟内匹配日志数 >= {rule.Threshold}");
-        sb.AppendLine($"当前: {count} 条");
+        if (rule.ConditionType == AlertConditionType.Ratio)
+        {
+            sb.AppendLine($"条件: 最近 {rule.WindowMinutes} 分钟内错误占比 >= {rule.Threshold}%");
+            sb.AppendLine($"当前: {value}%");
+        }
+        else
+        {
+            sb.AppendLine($"条件: 最近 {rule.WindowMinutes} 分钟内匹配日志数 >= {rule.Threshold}");
+            sb.AppendLine($"当前: {value} 条");
+        }
+
         if (!string.IsNullOrWhiteSpace(rule.Keyword))
             sb.AppendLine($"关键词: {rule.Keyword}");
         return sb.ToString();

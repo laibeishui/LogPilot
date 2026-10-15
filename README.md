@@ -16,7 +16,7 @@
 - ASP.NET Core 8 MVC + Web API（Razor + 渐进式前端）
 - SQLite + Dapper（元数据）
 - VictoriaLogs（业务日志）
-- 接入：OTLP/HTTP Protobuf（主）+ HTTP JSON 批量（辅）
+- 接入：OTLP/HTTP Protobuf（主）+ OTLP/HTTP JSON 与 HTTP JSON 批量（辅）
 
 ## 快速开始
 
@@ -80,6 +80,8 @@ curl -X POST "$LOGPILOT_URL/api/v1/ingest/logs" \
 
 3. 打开「日志检索」查看。
 
+多语言示例：`examples/dotnet-console-ingest`（.NET）、`examples/java-ingest`（Java）、`examples/python-ingest`（Python）、`examples/curl-json`（curl）。
+
 ## 仓库结构
 
 ```text
@@ -103,6 +105,7 @@ docs/                       # 产品与设计文档
 | M4 | 日志检索与详情 | 完成 |
 | M5 | 多平台部署（Docker / Win / Linux） | 完成 |
 | M6 | 告警中心（规则 / 渠道 / 事件 / 评估引擎） | 完成 |
+| M7 | 总览统计与趋势、异常指纹聚合、SSE 实时日志、OTLP JSON 兼容、告警 ratio 条件与规则静默期、写入失败诊断 | 完成 |
 
 ## 文档
 

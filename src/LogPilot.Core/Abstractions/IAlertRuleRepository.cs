@@ -14,5 +14,7 @@ public interface IAlertRuleRepository
 
     Task UpdateAsync(AlertRule rule, CancellationToken cancellationToken = default);
 
+    Task UpdateSilenceAsync(long id, DateTimeOffset? silenceUntil, CancellationToken cancellationToken = default);
+
     Task DeleteAsync(long id, CancellationToken cancellationToken = default);
 }

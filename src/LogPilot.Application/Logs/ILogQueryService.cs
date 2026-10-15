@@ -28,6 +28,16 @@ public interface ILogQueryService
         DateTimeOffset? endTime,
         CancellationToken cancellationToken = default);
 
+    Task<LogContextDto> GetContextAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        DateTimeOffset? timestamp,
+        int? beforeMinutes,
+        int? afterMinutes,
+        int? limit,
+        CancellationToken cancellationToken = default);
+
     Task<StatsOverviewDto> GetOverviewAsync(
         long userId,
         bool isSystemAdmin,
@@ -43,5 +53,26 @@ public interface ILogQueryService
         DateTimeOffset? startTime,
         DateTimeOffset? endTime,
         string? interval,
+        CancellationToken cancellationToken = default);
+
+    Task<StatsExceptionsDto> GetExceptionsAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        DateTimeOffset? startTime,
+        DateTimeOffset? endTime,
+        int? top,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 实时跟随日志：逐条产出新日志，用于 SSE 推送。
+    /// </summary>
+    IAsyncEnumerable<LogSearchItemDto> TailAsync(
+        long userId,
+        bool isSystemAdmin,
+        long projectId,
+        string? service,
+        string? level,
+        string? keyword,
         CancellationToken cancellationToken = default);
 }

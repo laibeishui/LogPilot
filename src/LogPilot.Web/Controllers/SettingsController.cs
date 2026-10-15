@@ -1,3 +1,4 @@
+using LogPilot.Core.Abstractions;
 using Microsoft.AspNetCore.Mvc;
 
 namespace LogPilot.Web.Controllers;
@@ -8,6 +9,13 @@ namespace LogPilot.Web.Controllers;
 [Route("settings")]
 public sealed class SettingsController : Controller
 {
+    private readonly ILogWriteMetrics _writeMetrics;
+
+    public SettingsController(ILogWriteMetrics writeMetrics)
+    {
+        _writeMetrics = writeMetrics;
+    }
+
     [HttpGet("")]
-    public IActionResult Index() => View();
+    public IActionResult Index() => View(_writeMetrics.GetSnapshot());
 }

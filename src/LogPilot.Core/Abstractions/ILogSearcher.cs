@@ -45,6 +45,26 @@ public interface ILogSearcher
         string interval,
         bool errorsOnly,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 拉取错误样本用于异常指纹聚合（按时间降序，最多 limit 条）。
+    /// </summary>
+    Task<IReadOnlyList<LogSearchItem>> ListErrorSamplesAsync(
+        long projectId,
+        DateTimeOffset startTime,
+        DateTimeOffset endTime,
+        int limit,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 实时跟随日志（VictoriaLogs tail），逐个产出新的日志事件，用于 SSE 推送。
+    /// </summary>
+    IAsyncEnumerable<LogSearchItem> TailAsync(
+        long projectId,
+        IReadOnlyList<string> services,
+        IReadOnlyList<string> levels,
+        string? keyword,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -106,6 +126,8 @@ public sealed class LogSearchItem
     public required string Message { get; init; }
 
     public string? TraceId { get; init; }
+
+    public string? ExceptionType { get; init; }
 }
 
 public sealed class LogDetail

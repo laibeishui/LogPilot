@@ -175,5 +175,24 @@ public sealed class LogSearchApiTests
             bool errorsOnly,
             CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<TrendPoint>>(Array.Empty<TrendPoint>());
+
+        public Task<IReadOnlyList<LogSearchItem>> ListErrorSamplesAsync(
+            long projectId,
+            DateTimeOffset startTime,
+            DateTimeOffset endTime,
+            int limit,
+            CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<LogSearchItem>>(Array.Empty<LogSearchItem>());
+
+        public async IAsyncEnumerable<LogSearchItem> TailAsync(
+            long projectId,
+            IReadOnlyList<string> services,
+            IReadOnlyList<string> levels,
+            string? keyword,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
     }
 }

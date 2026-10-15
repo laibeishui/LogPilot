@@ -67,4 +67,32 @@ public sealed class StatsApiController : ControllerBase
 
         return Ok(trend);
     }
+
+    /// <summary>
+    /// 异常聚合：把时间窗内的错误日志按指纹归并为"问题"列表。
+    /// </summary>
+    [HttpGet("exceptions")]
+    public async Task<IActionResult> Exceptions(
+        [FromQuery] long projectId,
+        [FromQuery] DateTimeOffset? startTime,
+        [FromQuery] DateTimeOffset? endTime,
+        [FromQuery] int? top,
+        CancellationToken cancellationToken)
+    {
+        if (!User.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        var result = await _logs.GetExceptionsAsync(
+            userId,
+            User.IsSystemAdmin(),
+            projectId,
+            startTime,
+            endTime,
+            top,
+            cancellationToken);
+
+        return Ok(result);
+    }
 }

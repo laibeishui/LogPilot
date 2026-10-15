@@ -9,7 +9,7 @@
 
 ## 1. 目标、原则与范围
 
-LogPilot 是轻量、易部署、易使用的自托管日志管理平台。后端采用 **ASP.NET Core 8 MVC + Web API**，页面采用 **Razor Views + Vue 3 渐进增强**，配置数据采用 **SQLite + Dapper + Microsoft.Data.Sqlite**，实际日志由 **VictoriaLogs** 保存和检索。使用 **OpenTelemetry SDK + OTLP/HTTP Protobuf** 作为推荐接入方式，兼容 **HTTP JSON 批量接入**。默认运行 **LogPilot + VictoriaLogs 两个 Docker 容器**，不要求 RabbitMQ、Redis、MySQL、ClickHouse 或独立 Node 前端服务。
+LogPilot 是轻量、易部署、易使用的自托管日志管理平台。后端采用 **ASP.NET Core 8 MVC + Web API**，页面采用 **Razor Views + 原生 JavaScript 渐进增强（不强制前端框架）**，配置数据采用 **SQLite + Dapper + Microsoft.Data.Sqlite**，实际日志由 **VictoriaLogs** 保存和检索。使用 **OpenTelemetry SDK + OTLP/HTTP Protobuf** 作为推荐接入方式，兼容 **HTTP JSON 批量接入**。默认运行 **LogPilot + VictoriaLogs 两个 Docker 容器**，不要求 RabbitMQ、Redis、MySQL、ClickHouse 或独立 Node 前端服务。
 
 开发规范应服务于产品目标，而不是为了分层而分层。V0.1 使用可理解的**模块化单体**；不拆微服务，不自研消息队列，不自研完整日志存储引擎。数据库访问以明确 SQL 为主，依赖通过 DI 注入，全部外部调用都可以被测试替换。
 
@@ -21,7 +21,7 @@ LogPilot 是轻量、易部署、易使用的自托管日志管理平台。后�
 4. 每个接入凭据只能写入被授权的项目；项目 ID 从已验证的凭据解析，不信任请求体里自报的项目 ID。
 5. 任何查询都强制附加服务端授权范围和时间范围；不能将浏览器提交的 LogsQL 直接送至 VictoriaLogs。
 6. 客户端异步批量发送；服务端对写入成功的承诺必须与真实下游确认语义一致，不允许「仅内存入队」就假称持久化成功。
-7. 默认两个容器：LogPilot 运行 ASP.NET Core、Razor/Vue 静态资源和 SQLite；VictoriaLogs 运行日志引擎。
+7. 默认两个容器：LogPilot 运行 ASP.NET Core、Razor 页面与静态资源和 SQLite；VictoriaLogs 运行日志引擎。
 8. 首版先实现稳定闭环，告警高级功能、gRPC、Trace 可视化、集群部署按 PRD 的版本边界后续推进。
 
 ## 2. 技术栈与版本管理
@@ -35,15 +35,15 @@ LogPilot 是轻量、易部署、易使用的自托管日志管理平台。后�
 | SQLite 驱动 | Microsoft.Data.Sqlite | **8.x**，保持与 .NET 8 兼容 |
 | 配置数据库 | SQLite | 运行环境提供的 SQLite 3.x，开启 FK 和 WAL |
 | 日志引擎 | VictoriaLogs | 方案基线 **v1.53.0**；正式发布前复核安全更新 |
-| 页面交互 | Vue 3 | 3.5.x 稳定系列，静态文件本地化 |
-| UI | Element Plus | 2.x 系列，验证与当前 Vue 配套版本 |
-| 图表 | ECharts | 6.x 系列（图表进入版本范围时再引入） |
+| 页面交互 | 原生 JavaScript | 渐进增强，**不强制前端框架**；静态文件本地化 |
+| UI 组件 | 按需选用轻量方案 | 仅在确有收益时引入，需本地托管并固定版本 |
+| 图表 | ECharts | 6.x 系列，本地托管；图表进入版本范围时引入 |
 | 通信 | OTLP/HTTP Protobuf | 遵循 OpenTelemetry 协议定义 |
 | 辅助接入 | HTTP JSON | 自定义版本化批量接口 |
 | 测试 | xUnit / ASP.NET Core TestHost | 按项目锁定版本 |
 | Docker | Docker Engine + Compose v2 | 镜像锁定具体 tag，发布流程可采用 digest 固定 |
 
-**不把具体补丁号写死为永久版本**。仓库维护 `Directory.Packages.props`（推荐中央包管理）、NuGet 锁文件、前端本地静态资源的版本/校验信息、`global.json`、基础镜像 tag，更新时提交 PR 并执行回归测试。首版 Razor 页面渐进使用 Vue，可以不引入 Vite；如果将来引入前端构建，Node 仅在构建阶段使用。
+**不把具体补丁号写死为永久版本**。仓库维护 `Directory.Packages.props`（推荐中央包管理）、NuGet 锁文件、前端本地静态资源的版本/校验信息、`global.json`、基础镜像 tag，更新时提交 PR 并执行回归测试。首版 Razor 页面使用原生 JS 渐进增强，可以不引入 Vite；如果将来引入前端构建，Node 仅在构建阶段使用。
 
 ## 3. 推荐 GitHub 仓库结构
 
@@ -81,7 +81,7 @@ logpilot/
 │   │   │   ├── js/
 │   │   │   │   ├── pages/
 │   │   │   │   └── components/
-│   │   │   └── lib/                  # 本地 Vue / Element Plus 文件
+│   │   │   └── lib/                  # 本地第三方静态文件（如 ECharts）
 │   │   ├── appsettings.json
 │   │   ├── appsettings.Development.json
 │   │   └── Program.cs
@@ -152,7 +152,7 @@ graph TD
 
 推荐 DI 统一注册；应用层依赖 `ILogStore`、`IProjectRepository`、`IApiKeyVerifier` 等抽象，实现由基础设施层提供。不要为了形式而创建大量空接口：**接口需要带来可替换、可测试或隔离外部边界的价值**。
 
-## 5. MVC、Web API 与 Vue 3 开发规范
+## 5. MVC、Web API 与前端开发规范
 
 ### 5.1 路由分工
 
@@ -162,12 +162,11 @@ graph TD
 - 简易写入：`POST /api/v1/ingest/logs` → LogPilot JSON 响应。
 - 运行探针：`/health/live` 与 `/health/ready`。
 
-### 5.2 Vue 渐进式集成
+### 5.2 前端渐进增强
 
 - Razor 负责布局、静态资源引用、用户页面入口和防伪信息。
-- Vue 负责日志过滤、列表、详情抽屉、异步加载和组件交互。
-- 每个复杂页面单独 `mount()`，统一入口脚本，不在 `.cshtml` 中堆大量 JS。
-- Vue、Element Plus 资源放在 `wwwroot/lib/` 并固定来源版本，不依赖公网 CDN。
+- 原生 JS 负责日志过滤、列表、详情抽屉、异步加载和交互；复杂交互可逐步模块化，避免在 `.cshtml` 中堆大量内联 JS。
+- 图表等第三方静态资源放在 `wwwroot/lib/` 并固定来源版本，不依赖公网 CDN。
 - 前端不保存可写入项目的长期 API Key；后台使用登录 Cookie 管理会话。
 - Razor 注入到 JS 的动态数据必须进行正确 JSON 编码，避免 XSS。
 - 表单修改、Cookie 认证 API 按 ASP.NET Core 反伪造策略保护；避免关闭 CSRF 校验换方便。
@@ -377,7 +376,7 @@ graph TD
 ```
 
 - Docker 多阶段构建，运行镜像只保留 .NET ASP.NET Core Runtime、发布文件和最少所需运行依赖。
-- `wwwroot` 直接托管 Vue 与 Element Plus 产物，不需要 Node 容器常驻。
+- `wwwroot` 直接托管本地静态资源与脚本（含图表库产物），不需要 Node 容器常驻。
 - 运行时建议非 root 用户，提前准备可写数据卷及权限。
 - 两容器分别设置健康检查、重启策略、资源观察及版本标签。
 - `depends_on` 不等于下游就绪，LogPilot 应有指数退避的就绪检查。
@@ -450,7 +449,7 @@ checkout
 | 编号 | 决策 | 原因 | 代价 |
 | --- | --- | --- | --- |
 | ADR-001 | .NET 8 MVC + Web API | 使用熟悉技术，页面和 API 同进程 | 需要清晰分隔管理与 OTLP 协议 |
-| ADR-002 | Razor + Vue 渐进式 | 无前端常驻容器，易部署 | 复杂页面的组件管理需自律 |
+| ADR-002 | Razor + 原生 JS 渐进增强（不强制前端框架） | 无前端常驻容器、无构建步骤，最贴合轻量化目标 | 复杂页面的交互组织需自律，确有收益时再引入轻量组件 |
 | ADR-003 | SQLite + Dapper | 管理数据少、依赖低、SQL 可控 | 写事务串行，迁移需自管 |
 | ADR-004 | VictoriaLogs | 日志专用存储、全文检索与统计 | 需要学习 LogsQL，测试中文搜索 |
 | ADR-005 | SDK OTLP/HTTP 优先 | 跨语言标准、客户端批量能力成熟 | 必须正确实现 OTLP 协议契约 |
@@ -476,7 +475,7 @@ checkout
 - OpenTelemetry OTLP：https://opentelemetry.io/docs/specs/otlp/
 - VictoriaLogs：https://docs.victoriametrics.com/victorialogs/
 - SQLite WAL：https://www.sqlite.org/wal.html
-- Vue 3：https://vuejs.org/guide/introduction.html
+- ECharts：https://echarts.apache.org/
 - Docker Compose：https://docs.docker.com/compose/
 
 ---

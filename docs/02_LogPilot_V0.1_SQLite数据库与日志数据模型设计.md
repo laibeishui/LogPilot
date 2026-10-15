@@ -20,7 +20,7 @@ graph TD
     B --> C["LogPilot API"]
     C --> D["SQLite metadata"]
     C --> E["VictoriaLogs"]
-    F["MVC and Vue Web"] --> C
+    F["MVC Web (Razor + 原生 JS)"] --> C
 ```
 
 | 存储 | 具体内容 | 生命周期 | 读写特点 |
@@ -167,22 +167,30 @@ COMMIT;
 
 ### 4.3 告警相关表（V0.2）
 
-V0.2 新增三张告警表（迁移 `0002_alerting.sql`）：
+V0.2 新增三张告警表（迁移 `0002_alerting.sql`），后续迁移 `0003_alert_enhancements.sql` 扩展了规则的条件类型与静默期：
 
 | 表 | 用途 |
 |---|---|
 | `lp_alert_channel` | 通知渠道（钉钉 / 企微 / 邮件 / Webhook），配置 JSON AES 加密存储 |
-| `lp_alert_rule` | 告警规则（匹配范围、计数阈值、窗口、冷却、渠道关联） |
+| `lp_alert_rule` | 告警规则（匹配范围、计数/占比阈值、窗口、冷却、渠道关联、静默期） |
 | `lp_alert_event` | 告警事件实例（状态、首次/最近触发、确认/恢复、指纹去重） |
 
 关键字段：
 - `lp_alert_channel`：`id`、`project_id`、`name`、`type`、`config_encrypted`、`enabled`、`created_at`、`updated_at`
-- `lp_alert_rule`：`id`、`project_id`、`name`、`service_name`、`levels`(JSON)、`keyword`、`condition_type`、`threshold`、`window_minutes`、`cooldown_minutes`、`repeat_minutes`、`channel_ids`(JSON)、`severity`、`notify_recovery`、`enabled`
+- `lp_alert_rule`：`id`、`project_id`、`name`、`service_name`、`levels`(JSON)、`keyword`、`condition_type`、`threshold`、`window_minutes`、`cooldown_minutes`、`repeat_minutes`、`channel_ids`(JSON)、`severity`、`notify_recovery`、`enabled`、`silence_until`
 - `lp_alert_event`：`id`、`project_id`、`rule_id`、`fingerprint`、`status`、`severity`、`summary`、`first_fired_at`、`last_fired_at`、`acknowledged_at`、`resolved_at`、`last_notified_at`、`notified_count`
+
+约束与取值：
+- `lp_alert_rule.condition_type`：`count`（匹配条数）或 `ratio`（匹配日志占同服务范围全部日志的百分比）
+- `lp_alert_rule.silence_until`：静默截止时间（TEXT，UTC）；`NULL` 表示未静默。静默期内命中不发通知
+- `lp_alert_event.status`：`firing`、`acknowledged`、`silenced`、`resolved`
+
+> `0003_alert_enhancements.sql` 因需修改 CHECK 约束而重建表，使用 `-- @no-transaction` 标记自行控制事务（`PRAGMA foreign_keys` 在事务内无效）。
 
 ### 4.4 后续版本的表（不要过早创建）
 
-`lp_audit_log`、`lp_error_group`：对应 V0.3 的审计和异常归并。各表结构在相应功能进入开发前再冻结，避免维护空表和无效字段。
+- `lp_audit_log`：对应 V0.3 的审计。表结构在相应功能进入开发前再冻结。
+- `lp_error_group`：**不再需要**。异常指纹与重复问题聚合已实现为查询期聚合（`GET /api/v1/stats/exceptions` 通过 LogsQL 按指纹归并），不落库、不建表。
 
 ## 5. VictoriaLogs 统一日志字段设计
 
