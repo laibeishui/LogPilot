@@ -52,6 +52,8 @@ public sealed class LogQueryService : ILogQueryService
             request.PageSize ?? _limits.DefaultPageSize,
             1,
             _limits.MaxPageSize);
+        var page = Math.Max(1, request.Page ?? 1);
+        var offset = (int)Math.Min((long)(page - 1) * pageSize, int.MaxValue);
 
         var result = await _searcher.SearchAsync(
             new AuthorizedLogQuery
@@ -64,15 +66,16 @@ public sealed class LogQueryService : ILogQueryService
                 Keyword = TrimToNull(request.Keyword),
                 TraceId = TrimToNull(request.TraceId),
                 PageSize = pageSize,
-                Cursor = TrimToNull(request.Cursor)
+                Offset = offset
             },
             cancellationToken).ConfigureAwait(false);
 
         return new LogSearchResponseDto
         {
             Items = result.Items.Select(MapItem).ToList(),
-            NextCursor = result.NextCursor,
-            HasMore = result.HasMore
+            Total = result.Total,
+            Page = page,
+            PageSize = pageSize
         };
     }
 
@@ -216,10 +219,10 @@ public sealed class LogQueryService : ILogQueryService
         var (start, end) = ResolveRange(startTime, endTime);
 
         var totalTask = _searcher.CountAsync(
-            projectId, start, end, null, Array.Empty<string>(), null, null, cancellationToken);
+            projectId, start, end, null, null, Array.Empty<string>(), null, null, cancellationToken);
 
         var errorTask = _searcher.CountAsync(
-            projectId, start, end, null, new[] { "ERROR", "FATAL" }, null, null, cancellationToken);
+            projectId, start, end, null, null, new[] { "ERROR", "FATAL" }, null, null, cancellationToken);
 
         var servicesTask = _searcher.ListServicesAsync(projectId, start, end, cancellationToken);
 
@@ -357,10 +360,22 @@ public sealed class LogQueryService : ILogQueryService
         var levels = NormalizeList(level is null ? null : new[] { level });
         var keywordFilter = TrimToNull(keyword);
 
+        // 长连接期间周期性复核权限：成员被移出项目后，已建立的连接必须在有限时间内失效。
+        var recheckInterval = TimeSpan.FromSeconds(Math.Max(1, _limits.StreamRecheckSeconds));
+        var nextRecheck = DateTimeOffset.UtcNow.Add(recheckInterval);
+
         await foreach (var item in _searcher
             .TailAsync(projectId, services, levels, keywordFilter, cancellationToken)
             .ConfigureAwait(false))
         {
+            var now = DateTimeOffset.UtcNow;
+            if (now >= nextRecheck)
+            {
+                await _access.EnsureCanViewAsync(userId, isSystemAdmin, projectId, cancellationToken)
+                    .ConfigureAwait(false);
+                nextRecheck = now.Add(recheckInterval);
+            }
+
             yield return MapItem(item);
         }
     }
@@ -407,14 +422,6 @@ public sealed class LogQueryService : ILogQueryService
         if (start >= end)
         {
             throw new AppException("INVALID_ARGUMENT", "startTime 必须早于 endTime。");
-        }
-
-        var maxRange = TimeSpan.FromHours(Math.Max(1, _limits.MaxRangeHours));
-        if (end - start > maxRange)
-        {
-            throw new AppException(
-                "INVALID_ARGUMENT",
-                $"查询时间窗不能超过 {_limits.MaxRangeHours} 小时。");
         }
 
         return (start, end);

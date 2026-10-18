@@ -41,12 +41,11 @@ public sealed class OtlpLogsApiController : ControllerBase
                 Request.Headers.Authorization.ToString(),
                 cancellationToken);
 
-            await using var bodyStream = await OpenBodyStreamAsync(cancellationToken).ConfigureAwait(false);
-            using var memory = new MemoryStream();
-            await bodyStream.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
-            var bytes = memory.ToArray();
+            await using var bodyStream = OpenBodyStream();
+            var bytes = await ReadWithinLimitAsync(bodyStream, _limits.MaxBodyBytes, cancellationToken)
+                .ConfigureAwait(false);
 
-            if (bytes.Length > _limits.MaxBodyBytes)
+            if (bytes is null)
             {
                 return StatusCode(StatusCodes.Status413PayloadTooLarge);
             }
@@ -77,20 +76,40 @@ public sealed class OtlpLogsApiController : ControllerBase
             : OtlpEncoding.Protobuf;
     }
 
-    private async Task<Stream> OpenBodyStreamAsync(CancellationToken cancellationToken)
+    private Stream OpenBodyStream()
     {
         var encoding = Request.Headers.ContentEncoding.ToString();
         if (encoding.Contains("gzip", StringComparison.OrdinalIgnoreCase))
         {
-            // 解压后仍受 MaxBodyBytes 限制（由上层检查）
-            var gzip = new GZipStream(Request.Body, CompressionMode.Decompress, leaveOpen: true);
-            var limited = new MemoryStream();
-            await gzip.CopyToAsync(limited, cancellationToken).ConfigureAwait(false);
-            await gzip.DisposeAsync().ConfigureAwait(false);
-            limited.Position = 0;
-            return limited;
+            return new GZipStream(Request.Body, CompressionMode.Decompress, leaveOpen: true);
         }
 
         return Request.Body;
+    }
+
+    /// <summary>
+    /// 在 maxBytes 限额内读取整个请求体（gzip 时为解压后的字节数），超限返回 null。
+    /// 限额必须在读取过程中判断：若先全量解压再检查，构造出的压缩包可在极小体积下展开出极大内容（zip bomb）撑爆内存。
+    /// </summary>
+    private static async Task<byte[]?> ReadWithinLimitAsync(
+        Stream body,
+        long maxBytes,
+        CancellationToken cancellationToken)
+    {
+        using var memory = new MemoryStream();
+        var chunk = new byte[64 * 1024];
+
+        int read;
+        while ((read = await body.ReadAsync(chunk.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            if (memory.Length + read > maxBytes)
+            {
+                return null;
+            }
+
+            memory.Write(chunk, 0, read);
+        }
+
+        return memory.ToArray();
     }
 }

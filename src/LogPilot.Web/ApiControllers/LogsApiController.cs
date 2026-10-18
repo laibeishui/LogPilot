@@ -165,7 +165,9 @@ public sealed class LogsApiController : ControllerBase
 
         try
         {
-            await WriteRawAsync(": connected\n\n", cancellationToken).ConfigureAwait(false);
+            // 注意：先不写任何内容，让建连阶段的权限校验失败能够返回非 200 状态码，
+            // 从而避免 EventSource 反复重连。首条日志到达（或心跳）时再确认连接。
+            var connected = false;
 
             await foreach (var item in _logs.TailAsync(
                 userId,
@@ -176,6 +178,12 @@ public sealed class LogsApiController : ControllerBase
                 keyword,
                 cancellationToken).ConfigureAwait(false))
             {
+                if (!connected)
+                {
+                    await WriteRawAsync(": connected\n\n", cancellationToken).ConfigureAwait(false);
+                    connected = true;
+                }
+
                 var payload = JsonSerializer.Serialize(item, StreamJson);
                 await WriteRawAsync($"event: log\ndata: {payload}\n\n", cancellationToken)
                     .ConfigureAwait(false);
@@ -185,13 +193,25 @@ public sealed class LogsApiController : ControllerBase
         {
             // 客户端正常断开
         }
+        catch (AppException) when (!Response.HasStarted)
+        {
+            // 建连即被拒（如无权访问该项目）：尚未写出任何内容，交给 ApiExceptionFilter
+            // 返回统一的非 200 响应，EventSource 只会失败一次而不会陷入重连循环。
+            // 这里必须先清掉已预设的 SSE Content-Type，否则 JSON 错误体会因内容协商失败变成 406。
+            Response.ContentType = null;
+            Response.Headers.Remove("X-Accel-Buffering");
+            throw;
+        }
         catch (AppException ex)
         {
-            var payload = JsonSerializer.Serialize(new { message = ex.Message }, StreamJson);
+            // 长连接中途撤销权限：先明确告知前端原因（前端据此停止自动重连），再结束流。
+            var payload = JsonSerializer.Serialize(
+                new { code = ex.Code, message = ex.Message },
+                StreamJson);
             try
             {
                 await WriteRawAsync(
-                    $"event: error\ndata: {payload}\n\n",
+                    $"event: denied\ndata: {payload}\n\n",
                     CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception)

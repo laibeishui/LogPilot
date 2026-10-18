@@ -101,6 +101,22 @@ internal static class Program
                 continue;
             }
 
+            if (IsChineseSampleCommand(line))
+            {
+                try
+                {
+                    await SendChineseSamplesAsync(http, options).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"发送失败: {ex.Message}");
+                    Console.ResetColor();
+                }
+
+                continue;
+            }
+
             // 支持一行写法：  10 用户登录成功
             string message;
             int count;
@@ -202,6 +218,79 @@ internal static class Program
         Console.WriteLine($"✓ 已发送 {count} 条 | level={level} | TraceId={traceId}");
         Console.ResetColor();
     }
+
+    /// <summary>内置中文样例：覆盖中文正文、中文子串、中文异常消息/堆栈等检索场景。</summary>
+    private static readonly (string Level, string Message, string? ExType, string? ExMessage, string? ExStack)[] ChineseSamples =
+    [
+        ("Info", "用户登录成功，用户ID=10086，来源=微信小程序", null, null, null),
+        ("Info", "订单支付完成，订单号=SO202610170001，金额=299.00 元", null, null, null),
+        ("Warn", "缓存命中率偏低，当前命中率=42%，建议检查热点 Key", null, null, null),
+        ("Warn", "接口响应较慢，耗时 1820ms，超过阈值 1000ms", null, null, null),
+        ("Error", "数据库连接超时，已重试 3 次仍然失败", null, null, null),
+        ("Error", "调用第三方支付网关失败：连接被拒绝", null, null, null),
+        ("Info", "定时任务「每日对账」开始执行", null, null, null),
+        ("Info", "定时任务「每日对账」执行完成，共处理 1280 条记录", null, null, null),
+        ("Error", "处理订单时发生未捕获异常",
+            "System.NullReferenceException",
+            "未将对象引用设置到对象的实例",
+            "   at LogPilot.Demo.OrderService.结算订单(Order order)\n   at LogPilot.Demo.Program.Main(String[] args)"),
+        ("Error", "库存扣减失败",
+            "System.InvalidOperationException",
+            "库存不足：商品编号 SKU-8899，当前库存 0",
+            "   at LogPilot.Demo.StockService.扣减库存(String sku, Int32 quantity)"),
+    ];
+
+    private static async Task SendChineseSamplesAsync(HttpClient http, CliOptions options)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var traceId = ActivityTraceId.CreateRandom().ToHexString();
+        var logs = new List<JsonLogItem>(ChineseSamples.Length);
+
+        for (var i = 0; i < ChineseSamples.Length; i++)
+        {
+            var (sampleLevel, message, exType, exMessage, exStack) = ChineseSamples[i];
+            logs.Add(new JsonLogItem
+            {
+                Timestamp = now.AddMilliseconds(i),
+                ServiceName = options.ServiceName,
+                Environment = "dev",
+                Level = sampleLevel,
+                Message = $"[中文样例] {message}",
+                TraceId = traceId,
+                ExceptionType = exType,
+                ExceptionMessage = exMessage,
+                ExceptionStackTrace = exStack,
+                Attributes = new Dictionary<string, object?>
+                {
+                    ["module"] = "中文样例",
+                    ["biz"] = "订单",
+                    ["seq"] = i + 1
+                }
+            });
+        }
+
+        var url = $"{options.BaseUrl.TrimEnd('/')}/api/v1/ingest/logs";
+        using var response = await http.PostAsJsonAsync(
+            url,
+            new JsonIngestRequest { Logs = logs },
+            JsonOptions).ConfigureAwait(false);
+        var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Console.WriteLine(PrettyJson(body));
+            throw new InvalidOperationException($"HTTP {(int)response.StatusCode}");
+        }
+
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"✓ 已发送 {logs.Count} 条中文样例 | TraceId={traceId}");
+        Console.WriteLine("  试试这些关键词: 超时 / 连接 / 订单 / 库存不足 / 每日对账");
+        Console.ResetColor();
+    }
+
+    private static bool IsChineseSampleCommand(string line)
+        => line.Equals("zh", StringComparison.OrdinalIgnoreCase)
+           || line is "中文" or "样例" or "中文样例";
 
     private static async Task SendBatchOtlpAsync(
         ILogger logger,
@@ -360,6 +449,7 @@ internal static class Program
               2) 一行写完:  10 用户登录成功
 
             命令:
+              zh | 中文           发送 10 条内置中文样例日志（含中文异常堆栈）
               level Info|Warn|Error|Debug|Trace|Fatal
               mode json|otlp
               help / quit
@@ -544,6 +634,6 @@ internal sealed class JsonLogItem
     public string? TraceId { get; init; }
     public string? ExceptionType { get; init; }
     public string? ExceptionMessage { get; init; }
-    public string? ExceptionStack { get; init; }
+    public string? ExceptionStackTrace { get; init; }
     public Dictionary<string, object?>? Attributes { get; init; }
 }

@@ -21,8 +21,10 @@ public static class DependencyInjection
 
         services.AddScoped<ISystemHealthService, SystemHealthService>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IUserManagementService, UserManagementService>();
         services.AddScoped<IProjectAccessService, ProjectAccessService>();
         services.AddScoped<IProjectService, ProjectService>();
+        services.AddScoped<IProjectMemberService, ProjectMemberService>();
         services.AddScoped<IApplicationService, ApplicationService>();
         services.AddScoped<IApiKeyService, ApiKeyService>();
         services.AddScoped<ILogQueryService, LogQueryService>();

@@ -26,7 +26,12 @@ public sealed class ProjectService : IProjectService
     {
         var items = await _projects.ListAccessibleAsync(userId, isSystemAdmin, cancellationToken)
             .ConfigureAwait(false);
-        return items.Select(Map).ToList();
+
+        var counts = await _projects
+            .CountMembersByProjectAsync(items.Select(x => x.Id).ToList(), cancellationToken)
+            .ConfigureAwait(false);
+
+        return items.Select(x => Map(x, counts.TryGetValue(x.Id, out var count) ? count : 0)).ToList();
     }
 
     public async Task<ProjectDto> GetAsync(
@@ -49,7 +54,12 @@ public sealed class ProjectService : IProjectService
         CreateProjectRequest request,
         CancellationToken cancellationToken = default)
     {
-        // V0.1：系统管理员或已登录用户均可创建；创建者成为 owner
+        // 仅系统管理员可创建项目；创建者不再自动成为 owner，成员由管理员在「项目成员」中配置。
+        if (!isSystemAdmin)
+        {
+            throw new AppException("FORBIDDEN", "仅系统管理员可创建项目。", 403);
+        }
+
         var name = (request.Name ?? string.Empty).Trim();
         var code = (request.Code ?? string.Empty).Trim().ToLowerInvariant();
         var description = (request.Description ?? string.Empty).Trim();
@@ -88,8 +98,6 @@ public sealed class ProjectService : IProjectService
         };
 
         var id = await _projects.InsertAsync(project, cancellationToken).ConfigureAwait(false);
-        await _projects.AddMemberAsync(id, userId, ProjectMemberRole.Owner, now, cancellationToken)
-            .ConfigureAwait(false);
 
         project = (await _projects.FindByIdAsync(id, cancellationToken).ConfigureAwait(false))!;
         return Map(project);
@@ -138,7 +146,7 @@ public sealed class ProjectService : IProjectService
         return Map(updated);
     }
 
-    private static ProjectDto Map(Project project) => new()
+    private static ProjectDto Map(Project project, int memberCount = 0) => new()
     {
         Id = project.Id,
         Code = project.Code,
@@ -146,6 +154,7 @@ public sealed class ProjectService : IProjectService
         Description = project.Description,
         Status = project.Status == EntityStatus.Enabled ? "enabled" : "disabled",
         CreatedAt = project.CreatedAt,
-        UpdatedAt = project.UpdatedAt
+        UpdatedAt = project.UpdatedAt,
+        MemberCount = memberCount
     };
 }

@@ -2,6 +2,8 @@
 
 > 文档编号：06｜日期：2026-10-13  
 > 目标：同一套代码同时支持 **Docker 全栈**、**Windows 本机**、**Linux 本机**。
+>
+> 部署完成后怎么用（建项目、发 Token、接入日志、检索、告警），见 [`07_LogPilot_V0.1_使用指南.md`](07_LogPilot_V0.1_使用指南.md)。
 
 ## 1. 先认清架构（避免走弯路）
 
@@ -155,5 +157,12 @@ journalctl -u logpilot -f
 | `ASPNETCORE_URLS` | 监听地址 | `http://0.0.0.0:8080` |
 | `Storage__Sqlite__DataSource` | SQLite 文件 | `./data/logpilot.db` 或 `/app/data/logpilot.db` |
 | `Storage__VictoriaLogs__BaseUrl` | VL 地址 | 容器内 `http://victorialogs:9428`；本机 `http://127.0.0.1:9428` |
+| `Storage__VictoriaLogs__TimeoutSeconds` | VL 查询/写入超时（秒） | `10` |
 | `Ingestion__MaxBatchRecords` | 单批条数 | `500` |
-| `Query__MaxRangeHours` | 最大查询窗 | `24` |
+| `Ingestion__MaxBodyBytes` | 单次接入请求体上限（字节，gzip 解压后同样受此限制，超限返回 413） | `1048576` |
+| `Ingestion__MaxRequestsPerMinute` | 单接入方（按接入 Token 或来源 IP）每分钟请求上限，`<= 0` 表示不限流 | `600` |
+| `Alerting__ConfigKey` | 通知渠道配置的对称加密密钥（64 位十六进制或 Base64 的 32 字节）；留空则使用开发默认密钥并在启动日志告警 | `（必填）` |
+| `Query__DefaultRangeMinutes` | 默认查询窗（跨度不限） | `15` |
+| `Query__DefaultPageSize` | 默认每页条数 | `50` |
+| `Query__MaxPageSize` | 每页条数上限 | `100` |
+| `Query__StreamRecheckSeconds` | 实时日志（SSE）长连接重新校验项目权限的间隔（秒） | `30` |

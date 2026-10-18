@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using LogPilot.Application.Common;
 using LogPilot.Core.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -28,44 +29,48 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
         AuthorizedLogQuery query,
         CancellationToken cancellationToken = default)
     {
-        var effective = ApplyCursor(query);
-        var logsQl = LogsQlBuilder.BuildSearch(effective);
-        var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
-
         var pageSize = Math.Clamp(query.PageSize, 1, 100);
+        var normalized = new AuthorizedLogQuery
+        {
+            ProjectId = query.ProjectId,
+            StartTime = query.StartTime,
+            EndTime = query.EndTime,
+            Services = query.Services,
+            Levels = query.Levels,
+            Keyword = query.Keyword,
+            TraceId = query.TraceId,
+            PageSize = pageSize,
+            Offset = Math.Max(0, query.Offset)
+        };
+
+        var rows = await ExecuteQueryAsync(LogsQlBuilder.BuildSearch(normalized), cancellationToken)
+            .ConfigureAwait(false);
+
         var items = rows
             .Select(MapSearchItem)
             .Where(x => x is not null)
             .Cast<LogSearchItem>()
+            .Take(pageSize)
             .ToList();
 
-        // 游标页：去掉与锚点完全相同的事件，避免重复
-        if (SearchCursor.TryDecode(query.Cursor, out var cursor) && !string.IsNullOrWhiteSpace(cursor.EventId))
-        {
-            items = items
-                .Where(x => !(x.Timestamp == cursor.CursorTime && x.Id == cursor.EventId))
-                .ToList();
-        }
-
-        var hasMore = items.Count > pageSize;
-        if (hasMore)
-        {
-            items = items.Take(pageSize).ToList();
-        }
-
-        string? nextCursor = null;
-        if (hasMore && items.Count > 0)
-        {
-            var last = items[^1];
-            nextCursor = SearchCursor.Encode(last.Timestamp, last.Id);
-        }
+        var total = await CountSearchAsync(normalized, cancellationToken).ConfigureAwait(false);
 
         return new LogSearchResult
         {
             Items = items,
-            HasMore = hasMore,
-            NextCursor = nextCursor
+            Total = total
         };
+    }
+
+    /// <summary>
+    /// 统计与检索完全相同的筛选条件下的日志总数。
+    /// 查询失败时抛出异常，不返回 0，避免把存储故障表现成“没有日志”。
+    /// </summary>
+    private async Task<long> CountSearchAsync(AuthorizedLogQuery query, CancellationToken cancellationToken)
+    {
+        var rows = await ExecuteQueryAsync(LogsQlBuilder.BuildSearchCount(query), cancellationToken)
+            .ConfigureAwait(false);
+        return rows.Count == 0 ? 0 : ExtractCount(rows[0]);
     }
 
     public async Task<LogDetail?> GetByEventIdAsync(
@@ -92,22 +97,14 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
         CancellationToken cancellationToken = default)
     {
         var logsQl = LogsQlBuilder.BuildServiceFacets(projectId, startTime, endTime);
-        try
-        {
-            var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
-            return rows
-                .Select(r => GetString(r, "service_name"))
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(s => s, StringComparer.Ordinal)
-                .Take(200)
-                .ToList()!;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to list services for project {ProjectId}", projectId);
-            return Array.Empty<string>();
-        }
+        var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
+        return rows
+            .Select(r => GetString(r, "service_name"))
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .Take(200)
+            .ToList()!;
     }
 
     public async Task<long> CountAsync(
@@ -115,58 +112,51 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
         DateTimeOffset startTime,
         DateTimeOffset endTime,
         string? serviceName,
+        string? environment,
         IReadOnlyList<string> levels,
         string? keyword,
         string? exceptionType,
         CancellationToken cancellationToken = default)
     {
-        var logsQl = LogsQlBuilder.BuildCount(projectId, startTime, endTime, serviceName, levels, keyword, exceptionType);
-        try
+        var logsQl = LogsQlBuilder.BuildCount(projectId, startTime, endTime, serviceName, environment, levels, keyword, exceptionType);
+        var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
+        if (rows.Count == 0)
         {
-            var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
-            if (rows.Count == 0)
-            {
-                return 0;
-            }
-
-            // stats count() 返回 {"count()": N} 或 {"count(*)": N} 或 {"count": N}
-            var row = rows[0];
-            if (row.TryGetProperty("count(*)", out var countStarProp))
-            {
-                return ParseCount(countStarProp);
-            }
-
-            if (row.TryGetProperty("count()", out var countProp))
-            {
-                return ParseCount(countProp);
-            }
-
-            if (row.TryGetProperty("count", out countProp))
-            {
-                return ParseCount(countProp);
-            }
-
-            // 兜底：取第一个数字或数字字符串属性
-            foreach (var prop in row.EnumerateObject())
-            {
-                if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt64(out var v))
-                {
-                    return v;
-                }
-
-                if (prop.Value.ValueKind == JsonValueKind.String && long.TryParse(prop.Value.GetString(), out var sv))
-                {
-                    return sv;
-                }
-            }
-
             return 0;
         }
-        catch (Exception ex)
+
+        // stats count() 返回 {"count()": N} 或 {"count(*)": N} 或 {"count": N}
+        var row = rows[0];
+        if (row.TryGetProperty("count(*)", out var countStarProp))
         {
-            _logger.LogWarning(ex, "Failed to count logs for project {ProjectId}", projectId);
-            return 0;
+            return ParseCount(countStarProp);
         }
+
+        if (row.TryGetProperty("count()", out var countProp))
+        {
+            return ParseCount(countProp);
+        }
+
+        if (row.TryGetProperty("count", out countProp))
+        {
+            return ParseCount(countProp);
+        }
+
+        // 兜底：取第一个数字或数字字符串属性
+        foreach (var prop in row.EnumerateObject())
+        {
+            if (prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt64(out var v))
+            {
+                return v;
+            }
+
+            if (prop.Value.ValueKind == JsonValueKind.String && long.TryParse(prop.Value.GetString(), out var sv))
+            {
+                return sv;
+            }
+        }
+
+        return 0;
     }
 
     public async Task<IReadOnlyList<TrendPoint>> TrendAsync(
@@ -178,37 +168,29 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
         CancellationToken cancellationToken = default)
     {
         var logsQl = LogsQlBuilder.BuildTrend(projectId, startTime, endTime, interval, errorsOnly);
-        try
+        var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
+        var points = new List<TrendPoint>(rows.Count);
+        foreach (var row in rows)
         {
-            var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
-            var points = new List<TrendPoint>(rows.Count);
-            foreach (var row in rows)
+            // VictoriaLogs 返回 _time[5m] 或 _time[1m] 等字段名
+            var bucketField = FindTimeBucketField(row);
+            var count = ExtractCount(row);
+            if (bucketField is null)
             {
-                // VictoriaLogs 返回 _time[5m] 或 _time[1m] 等字段名
-                var bucketField = FindTimeBucketField(row);
-                var count = ExtractCount(row);
-                if (bucketField is null)
-                {
-                    continue;
-                }
-
-                if (DateTimeOffset.TryParse(bucketField, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var bucket))
-                {
-                    points.Add(new TrendPoint
-                    {
-                        Bucket = bucket.ToUniversalTime(),
-                        Count = count
-                    });
-                }
+                continue;
             }
 
-            return points.OrderBy(p => p.Bucket).ToList();
+            if (DateTimeOffset.TryParse(bucketField, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var bucket))
+            {
+                points.Add(new TrendPoint
+                {
+                    Bucket = bucket.ToUniversalTime(),
+                    Count = count
+                });
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to get trend for project {ProjectId}", projectId);
-            return Array.Empty<TrendPoint>();
-        }
+
+        return points.OrderBy(p => p.Bucket).ToList();
     }
 
     public async Task<IReadOnlyList<LogSearchItem>> ListErrorSamplesAsync(
@@ -219,20 +201,12 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
         CancellationToken cancellationToken = default)
     {
         var logsQl = LogsQlBuilder.BuildErrorSamples(projectId, startTime, endTime, limit);
-        try
-        {
-            var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
-            return rows
-                .Select(MapSearchItem)
-                .Where(x => x is not null)
-                .Cast<LogSearchItem>()
-                .ToList();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to list error samples for project {ProjectId}", projectId);
-            return Array.Empty<LogSearchItem>();
-        }
+        var rows = await ExecuteQueryAsync(logsQl, cancellationToken).ConfigureAwait(false);
+        return rows
+            .Select(MapSearchItem)
+            .Where(x => x is not null)
+            .Cast<LogSearchItem>()
+            .ToList();
     }
 
     public async IAsyncEnumerable<LogSearchItem> TailAsync(
@@ -384,34 +358,10 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
         return 0;
     }
 
-    private static AuthorizedLogQuery ApplyCursor(AuthorizedLogQuery query)
-    {
-        if (!SearchCursor.TryDecode(query.Cursor, out var cursor))
-        {
-            return query;
-        }
-
-        // 下一页：结束时间收敛到游标时间（半开区间上界）
-        var end = cursor.CursorTime;
-        if (end <= query.StartTime)
-        {
-            end = query.StartTime.AddMilliseconds(1);
-        }
-
-        return new AuthorizedLogQuery
-        {
-            ProjectId = query.ProjectId,
-            StartTime = query.StartTime,
-            EndTime = end,
-            Services = query.Services,
-            Levels = query.Levels,
-            Keyword = query.Keyword,
-            TraceId = query.TraceId,
-            PageSize = query.PageSize,
-            Cursor = query.Cursor
-        };
-    }
-
+    /// <summary>
+    /// 执行 LogsQL 查询。任何下游故障（网络、超时、非 2xx）都转为 LOG_STORE_UNAVAILABLE，
+    /// 由调用方决定如何呈现，绝不在这一层降级成“0 条/空结果”。
+    /// </summary>
     private async Task<List<JsonElement>> ExecuteQueryAsync(string logsQl, CancellationToken cancellationToken)
     {
         var client = _httpClientFactory.CreateClient("VictoriaLogs");
@@ -421,18 +371,38 @@ public sealed class VictoriaLogsSearcher : ILogSearcher
         });
         content.Headers.ContentType = new MediaTypeHeaderValue("application/x-www-form-urlencoded");
 
-        using var response = await client.PostAsync("select/logsql/query", content, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        HttpResponseMessage response;
+        try
         {
-            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            _logger.LogWarning("VictoriaLogs query failed. Status={Status} Body={Body}", (int)response.StatusCode, Truncate(body));
-            throw new InvalidOperationException($"VictoriaLogs query failed with {(int)response.StatusCode}");
+            response = await client.PostAsync("select/logsql/query", content, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "VictoriaLogs query transport failure.");
+            throw LogStoreErrors.Unavailable("查询请求失败");
+        }
+        catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "VictoriaLogs query timed out.");
+            throw LogStoreErrors.Unavailable("查询超时");
         }
 
-        var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return ParseNdjson(text);
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                _logger.LogWarning(
+                    "VictoriaLogs query failed. Status={Status} Body={Body}",
+                    (int)response.StatusCode,
+                    Truncate(body));
+                throw LogStoreErrors.Unavailable($"查询返回 HTTP {(int)response.StatusCode}");
+            }
+
+            var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            return ParseNdjson(text);
+        }
     }
 
     private static List<JsonElement> ParseNdjson(string text)

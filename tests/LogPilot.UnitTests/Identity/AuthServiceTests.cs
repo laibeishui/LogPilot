@@ -103,5 +103,37 @@ public sealed class AuthServiceTests
 
         public Task UpdateLastLoginAsync(long userId, DateTimeOffset lastLoginAt, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
+
+        public Task<(IReadOnlyList<UserAccount> Items, int Total)> ListAsync(
+            string? keyword, int offset, int limit, CancellationToken cancellationToken = default)
+        {
+            var query = _users.AsEnumerable();
+            if (!string.IsNullOrWhiteSpace(keyword))
+            {
+                query = query.Where(x =>
+                    x.Username.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                    || x.DisplayName.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+            }
+
+            var all = query.OrderBy(x => x.Id).ToList();
+            return Task.FromResult<(IReadOnlyList<UserAccount>, int)>(
+                (all.Skip(offset).Take(limit).ToList(), all.Count));
+        }
+
+        public Task UpdateAsync(UserAccount user, CancellationToken cancellationToken = default)
+        {
+            var index = _users.FindIndex(x => x.Id == user.Id);
+            if (index >= 0)
+            {
+                _users[index] = user;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> UsernameExistsAsync(string username, long? excludeUserId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(_users.Any(x =>
+                x.Id != excludeUserId
+                && string.Equals(x.Username, username, StringComparison.OrdinalIgnoreCase)));
     }
 }

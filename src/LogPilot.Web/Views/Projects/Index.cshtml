@@ -1,13 +1,18 @@
+@using LogPilot.Web.Security
 @{
   ViewData["Title"] = "项目管理";
+  var isAdmin = User.IsSystemAdmin();
 }
 <div class="headline">
   <div>
     <h1>项目管理</h1>
-    <p>创建项目、停用项目。密钥请到接入中心管理。</p>
+    <p>@(isAdmin ? "创建项目、配置成员可见范围、停用项目。密钥请到接入中心管理。" : "查看你有权访问的项目。密钥请到接入中心管理。")</p>
   </div>
   <div>
-    <button class="btn primary" id="btnNew" type="button">+ 新建项目</button>
+    @if (isAdmin)
+    {
+      <button class="btn primary" id="btnNew" type="button">+ 新建项目</button>
+    }
   </div>
 </div>
 
@@ -41,24 +46,70 @@
         <tr>
           <th>名称</th>
           <th>编码</th>
+          <th>成员</th>
           <th>说明</th>
           <th>状态</th>
           <th>操作</th>
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="5" class="muted">加载中…</td></tr>
+        <tr><td colspan="6" class="muted">加载中…</td></tr>
       </tbody>
     </table>
   </div>
 </div>
 
+<div class="drawer-back" id="drawerBack"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <header>
+    <h2 id="drawerTitle">项目成员</h2>
+    <button class="btn" id="btnCloseDrawer" type="button">关闭</button>
+  </header>
+  <div class="inner">
+    <p class="muted" style="margin-top:0;font-size:12px">
+      只有成员才能查询到该项目的日志，成员数可在列表中查看。
+    </p>
+    <div class="rows" id="memberList">
+      <div class="muted">加载中…</div>
+    </div>
+    <div class="label" style="margin-top:20px">添加成员</div>
+    <div style="display:grid;grid-template-columns:1fr 170px auto;gap:10px;align-items:center">
+      <select class="field" id="addUserId"></select>
+      <select class="field" id="addRole">
+        <option value="Viewer">只读（viewer）</option>
+        <option value="Admin">管理员（admin）</option>
+        <option value="Owner">负责人（owner）</option>
+      </select>
+      <button class="btn primary" id="btnAddMember" type="button">添加</button>
+    </div>
+  </div>
+</aside>
+
 @section Scripts {
 <script>
   (() => {
+    const IS_ADMIN = @(isAdmin ? "true" : "false");
+    const ROLE_ORDER = ['Viewer', 'Admin', 'Owner'];
+    const ROLE_TEXT = { Viewer: '只读（viewer）', Admin: '管理员（admin）', Owner: '负责人（owner）' };
     const tbody = document.getElementById('tbody');
     const notice = document.getElementById('notice');
     const createPanel = document.getElementById('createPanel');
+    const drawer = document.getElementById('drawer');
+    const drawerBack = document.getElementById('drawerBack');
+    const drawerTitle = document.getElementById('drawerTitle');
+    const memberList = document.getElementById('memberList');
+    const addUserId = document.getElementById('addUserId');
+    const addRole = document.getElementById('addRole');
+
+    let projects = [];
+    let usersCache = null;
+    let currentProject = null;
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
 
     function showNotice(text, isError) {
       notice.style.display = 'block';
@@ -70,40 +121,93 @@
 
     async function load() {
       try {
-        const items = await LogPilotApi.api('/api/v1/projects');
-        if (!items.length) {
-          tbody.innerHTML = '<tr><td colspan="5" class="muted">暂无项目，点击右上角新建。</td></tr>';
+        projects = await LogPilotApi.api('/api/v1/projects');
+        if (!projects.length) {
+          tbody.innerHTML = `<tr><td colspan="6" class="muted">${IS_ADMIN ? '暂无项目，点击右上角新建。' : '暂无已授权项目，请联系管理员。'}</td></tr>`;
           return;
         }
-        tbody.innerHTML = items.map(p => `
+        tbody.innerHTML = projects.map(p => `
           <tr>
             <td><strong>${escapeHtml(p.name)}</strong></td>
             <td><code>${escapeHtml(p.code)}</code></td>
+            <td class="muted">${p.memberCount}</td>
             <td>${escapeHtml(p.description || '')}</td>
             <td><span class="pill">${p.status === 'enabled' ? '启用' : '停用'}</span></td>
             <td>
+              ${IS_ADMIN ? `<button class="btn" data-members="${p.id}" type="button">成员</button>` : ''}
               <a class="btn" href="/integrations?projectId=${p.id}">接入</a>
-              ${p.status === 'enabled'
-                ? `<button class="btn" data-disable="${p.id}" type="button">停用</button>`
-                : `<button class="btn" data-enable="${p.id}" type="button">启用</button>`}
+              ${IS_ADMIN
+                ? (p.status === 'enabled'
+                  ? `<button class="btn" data-disable="${p.id}" type="button">停用</button>`
+                  : `<button class="btn" data-enable="${p.id}" type="button">启用</button>`)
+                : ''}
             </td>
           </tr>`).join('');
       } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(e.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">${escapeHtml(e.message)}</td></tr>`;
       }
     }
 
-    function escapeHtml(s) {
-      return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    async function loadUsers() {
+      if (!usersCache) {
+        const data = await LogPilotApi.api('/api/v1/users?page=1&pageSize=100');
+        usersCache = data.items;
+      }
+      return usersCache;
     }
 
-    document.getElementById('btnNew').addEventListener('click', () => {
-      createPanel.style.display = 'block';
-    });
-    document.getElementById('btnCancel').addEventListener('click', () => {
-      createPanel.style.display = 'none';
-    });
-    document.getElementById('btnCreate').addEventListener('click', async () => {
+    async function refreshMembers() {
+      const members = await LogPilotApi.api(`/api/v1/projects/${currentProject.id}/members`);
+      if (!members.length) {
+        memberList.innerHTML = '<div class="muted">尚无成员，添加后该用户才能查询本项目日志。</div>';
+      } else {
+        memberList.innerHTML = members.map(m => `
+          <div style="display:grid;grid-template-columns:1fr 170px auto;gap:10px;align-items:center">
+            <div>
+              <strong>${escapeHtml(m.displayName || m.username)}</strong>
+              <div class="muted" style="font-size:12px">${escapeHtml(m.username)}</div>
+            </div>
+            <select class="field" data-role-user="${m.userId}">
+              ${ROLE_ORDER.map(r =>
+                `<option value="${r}"${r.toLowerCase() === m.role ? ' selected' : ''}>${ROLE_TEXT[r]}</option>`
+              ).join('')}
+            </select>
+            <button class="btn" data-remove-user="${m.userId}" type="button">移除</button>
+          </div>`).join('');
+      }
+
+      const users = await loadUsers();
+      const memberIds = new Set(members.map(m => m.userId));
+      const candidates = users.filter(u => !memberIds.has(u.id));
+      addUserId.innerHTML = candidates.length
+        ? candidates.map(u => `<option value="${u.id}">${escapeHtml(u.displayName || u.username)}（${escapeHtml(u.username)}）</option>`).join('')
+        : '<option value="">（没有可添加的用户）</option>';
+      document.getElementById('btnAddMember').disabled = !candidates.length;
+    }
+
+    async function openMembers(projectId) {
+      currentProject = projects.find(p => p.id === projectId);
+      if (!currentProject) return;
+      drawerTitle.textContent = `项目成员 · ${currentProject.name}`;
+      memberList.innerHTML = '<div class="muted">加载中…</div>';
+      drawer.classList.add('open');
+      drawerBack.classList.add('open');
+      try {
+        await refreshMembers();
+      } catch (e) {
+        memberList.innerHTML = `<div class="muted">${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove('open');
+      drawerBack.classList.remove('open');
+      currentProject = null;
+    }
+
+    document.getElementById('btnNew')?.addEventListener('click', () => { createPanel.style.display = 'block'; });
+    document.getElementById('btnCancel')?.addEventListener('click', () => { createPanel.style.display = 'none'; });
+    document.getElementById('btnCreate')?.addEventListener('click', async () => {
       try {
         await LogPilotApi.api('/api/v1/projects', {
           method: 'POST',
@@ -121,9 +225,63 @@
       }
     });
 
+    document.getElementById('btnCloseDrawer').addEventListener('click', closeDrawer);
+    drawerBack.addEventListener('click', closeDrawer);
+
+    document.getElementById('btnAddMember').addEventListener('click', async () => {
+      if (!currentProject || !addUserId.value) return;
+      try {
+        await LogPilotApi.api(`/api/v1/projects/${currentProject.id}/members`, {
+          method: 'POST',
+          body: { userId: Number(addUserId.value), role: addRole.value }
+        });
+        await refreshMembers();
+        await load();
+        showNotice('成员已添加');
+      } catch (e) {
+        showNotice(e.message || '添加失败', true);
+      }
+    });
+
+    memberList.addEventListener('change', async (e) => {
+      const userId = e.target.getAttribute('data-role-user');
+      if (!userId || !currentProject) return;
+      try {
+        await LogPilotApi.api(`/api/v1/projects/${currentProject.id}/members`, {
+          method: 'POST',
+          body: { userId: Number(userId), role: e.target.value }
+        });
+        await refreshMembers();
+        await load();
+        showNotice('成员角色已更新');
+      } catch (err) {
+        showNotice(err.message || '更新失败', true);
+      }
+    });
+
+    memberList.addEventListener('click', async (e) => {
+      const userId = e.target.getAttribute('data-remove-user');
+      if (!userId || !currentProject) return;
+      if (!confirm('移除后该用户将无法再查询本项目日志，确认？')) return;
+      try {
+        await LogPilotApi.api(`/api/v1/projects/${currentProject.id}/members/${userId}`, { method: 'DELETE' });
+        await refreshMembers();
+        await load();
+        showNotice('成员已移除');
+      } catch (err) {
+        showNotice(err.message || '移除失败', true);
+      }
+    });
+
     tbody.addEventListener('click', async (e) => {
-      const disableId = e.target.getAttribute('data-disable');
-      const enableId = e.target.getAttribute('data-enable');
+      const btn = e.target.closest('button');
+      if (!btn) return;
+
+      const membersId = btn.getAttribute('data-members');
+      if (membersId) { await openMembers(Number(membersId)); return; }
+
+      const disableId = btn.getAttribute('data-disable');
+      const enableId = btn.getAttribute('data-enable');
       const id = disableId || enableId;
       if (!id) return;
       if (disableId && !confirm('停用后该项目 Token 将无法写入，确认？')) return;

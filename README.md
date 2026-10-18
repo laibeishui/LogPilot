@@ -109,6 +109,7 @@ docs/                       # 产品与设计文档
 
 ## 文档
 
+- [使用指南](docs/07_LogPilot_V0.1_使用指南.md)
 - [部署指南](docs/06_LogPilot_V0.1_部署指南.md)
 - [PRD](docs/01_LogPilot_V0.1_产品需求文档_PRD.md)
 - [数据库设计](docs/02_LogPilot_V0.1_SQLite数据库与日志数据模型设计.md)

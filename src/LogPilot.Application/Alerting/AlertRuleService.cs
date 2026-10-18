@@ -79,6 +79,8 @@ public sealed class AlertRuleService : IAlertRuleService
             throw new AppException("INVALID_ARGUMENT", "时间窗口必须在 1~1440 分钟之间。");
         }
 
+        ValidateDurations(request.ForMinutes ?? 0, request.CooldownMinutes ?? 5, request.RepeatMinutes);
+
         if (request.ChannelIds is null || request.ChannelIds.Count == 0)
         {
             throw new AppException("INVALID_ARGUMENT", "至少选择一个通知渠道。");
@@ -154,6 +156,12 @@ public sealed class AlertRuleService : IAlertRuleService
             throw new AppException("INVALID_ARGUMENT", "时间窗口必须在 1~1440 分钟之间。");
         }
 
+        var forMinutes = request.ForMinutes ?? existing.ForMinutes;
+        var cooldownMinutes = request.CooldownMinutes ?? existing.CooldownMinutes;
+        // RepeatMinutes 未传（null）时保留原值，避免 PATCH 局部更新把已配置的重发间隔清空。
+        var repeatMinutes = request.RepeatMinutes ?? existing.RepeatMinutes;
+        ValidateDurations(forMinutes, cooldownMinutes, repeatMinutes);
+
         IReadOnlyList<long> channelIds;
         if (request.ChannelIds is not null)
         {
@@ -193,12 +201,12 @@ public sealed class AlertRuleService : IAlertRuleService
             ConditionType = conditionType,
             Threshold = threshold,
             WindowMinutes = windowMinutes,
-            ForMinutes = request.ForMinutes ?? existing.ForMinutes,
+            ForMinutes = forMinutes,
             ChannelIds = JsonSerializer.Serialize(channelIds),
             Severity = request.Severity ?? existing.Severity,
-            CooldownMinutes = request.CooldownMinutes ?? existing.CooldownMinutes,
+            CooldownMinutes = cooldownMinutes,
             NotifyRecovery = request.NotifyRecovery ?? existing.NotifyRecovery,
-            RepeatMinutes = request.RepeatMinutes,
+            RepeatMinutes = repeatMinutes,
             SilenceUntil = existing.SilenceUntil,
             CreatedBy = existing.CreatedBy,
             CreatedAt = existing.CreatedAt,
@@ -240,6 +248,27 @@ public sealed class AlertRuleService : IAlertRuleService
         }
 
         return rule;
+    }
+
+    /// <summary>
+    /// 校验时长类参数：负值或超大值会让告警评估行为异常（例如 0 分钟重发间隔会每轮都发送通知）。
+    /// </summary>
+    private static void ValidateDurations(int forMinutes, int cooldownMinutes, int? repeatMinutes)
+    {
+        if (forMinutes is < 0 or > 1440)
+        {
+            throw new AppException("INVALID_ARGUMENT", "持续命中时长必须在 0~1440 分钟之间。");
+        }
+
+        if (cooldownMinutes is < 0 or > 1440)
+        {
+            throw new AppException("INVALID_ARGUMENT", "冷却时间必须在 0~1440 分钟之间。");
+        }
+
+        if (repeatMinutes.HasValue && repeatMinutes.Value is < 1 or > 10080)
+        {
+            throw new AppException("INVALID_ARGUMENT", "重发间隔必须在 1~10080 分钟之间。");
+        }
     }
 
     private static AlertRuleDto Map(AlertRule r) => new()

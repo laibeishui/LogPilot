@@ -18,4 +18,9 @@ public sealed class IngestionLimits
     public int MaxAttributeDepth { get; set; } = 8;
 
     public int RequestTimeoutSeconds { get; set; } = 10;
+
+    /// <summary>
+    /// 单个接入方（按接入 Token 或来源 IP 区分）每分钟允许的接入请求数。&lt;= 0 表示不限流。
+    /// </summary>
+    public int MaxRequestsPerMinute { get; set; } = 600;
 }

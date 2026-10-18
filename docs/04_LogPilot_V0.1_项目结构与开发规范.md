@@ -139,9 +139,12 @@ graph TD
     A --> C["LogPilot.Infrastructure"]
     B --> D["LogPilot.Core"]
     C --> D
+    C --> B
     C --> E["SQLite"]
     C --> F["VictoriaLogs"]
 ```
+
+> `Infrastructure --> Application` 是组装期的单向引用：基础设施层实现 Application 定义的用例契约（如复用 `AppException`、`LogStoreErrors` 统一错误语义），**Application 不得反向引用 Infrastructure**。Web 只负责把两者装配起来。
 
 | 层 | 可以做 | 禁止做 |
 | --- | --- | --- |

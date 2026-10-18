@@ -19,18 +19,22 @@ public sealed class LogSearchRequestDto
 
     public string? TraceId { get; set; }
 
-    public int? PageSize { get; set; }
+    /// <summary>页码，从 1 开始；默认 1。</summary>
+    public int? Page { get; set; }
 
-    public string? Cursor { get; set; }
+    public int? PageSize { get; set; }
 }
 
 public sealed class LogSearchResponseDto
 {
     public required IReadOnlyList<LogSearchItemDto> Items { get; init; }
 
-    public string? NextCursor { get; init; }
+    /// <summary>匹配筛选条件的日志总条数（不受分页影响）。</summary>
+    public long Total { get; init; }
 
-    public bool HasMore { get; init; }
+    public int Page { get; init; }
+
+    public int PageSize { get; init; }
 }
 
 public sealed class LogSearchItemDto

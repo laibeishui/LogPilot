@@ -1,0 +1,360 @@
+@using LogPilot.Web.Security
+@{
+  ViewData["Title"] = "人员管理";
+  long currentUserId = 0;
+  User.TryGetUserId(out currentUserId);
+}
+<div class="headline">
+  <div>
+    <h1>人员管理</h1>
+    <p>创建账号、控制系统管理员、分配可见项目。成员只能看到被授权的项目日志。</p>
+  </div>
+  <div>
+    <button class="btn primary" id="btnNew" type="button">+ 新建用户</button>
+  </div>
+</div>
+
+<div id="notice" class="notice" style="display:none"></div>
+
+<div class="card" id="createPanel" style="display:none;margin-bottom:18px">
+  <div class="rows">
+    <div>
+      <label class="muted" for="username">用户名</label>
+      <input id="username" class="field" maxlength="64" placeholder="3–64 位字母、数字、下划线、点或短横线" />
+    </div>
+    <div>
+      <label class="muted" for="displayName">显示名</label>
+      <input id="displayName" class="field" maxlength="100" placeholder="留空则同用户名" />
+    </div>
+    <div>
+      <label class="muted" for="password">初始密码</label>
+      <input id="password" class="field" type="password" maxlength="128" placeholder="8–128 位" />
+    </div>
+    <div>
+      <label class="muted" for="isAdmin">
+        <input id="isAdmin" type="checkbox" /> 设为系统管理员（可管理全部项目与人员）
+      </label>
+    </div>
+    <div>
+      <button class="btn primary" id="btnCreate" type="button">创建</button>
+      <button class="btn" id="btnCancel" type="button">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="filters" style="margin-bottom:14px">
+    <div>
+      <label class="muted" for="keyword">搜索</label>
+      <input id="keyword" class="field" placeholder="用户名或显示名" />
+    </div>
+    <div>
+      <label class="muted">&nbsp;</label>
+      <button class="btn primary" id="btnSearch" type="button">查询</button>
+    </div>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>用户名</th>
+          <th>显示名</th>
+          <th>角色</th>
+          <th>状态</th>
+          <th>最近登录</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="6" class="muted">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    <button class="btn" id="btnPrev" type="button">上一页</button>
+    <span class="muted" id="pageInfo" style="font-size:12px">-</span>
+    <button class="btn" id="btnNext" type="button">下一页</button>
+  </div>
+</div>
+
+<div class="drawer-back" id="drawerBack"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <header>
+    <h2 id="drawerTitle">项目授权</h2>
+    <button class="btn" id="btnCloseDrawer" type="button">关闭</button>
+  </header>
+  <div class="inner">
+    <p class="muted" style="margin-top:0;font-size:12px">
+      勾选角色即授予该用户对应项目的日志可见性；留空表示不授权。
+    </p>
+    <div class="rows" id="membershipList">
+      <div class="muted">加载中…</div>
+    </div>
+    <div style="margin-top:18px">
+      <button class="btn primary" id="btnSaveMemberships" type="button">保存授权</button>
+    </div>
+  </div>
+</aside>
+
+@section Scripts {
+<script>
+  (() => {
+    const CURRENT_USER_ID = @currentUserId;
+    const ROLES = [
+      { value: '', label: '不授权' },
+      { value: 'Viewer', label: '只读（viewer）' },
+      { value: 'Admin', label: '管理员（admin）' },
+      { value: 'Owner', label: '负责人（owner）' }
+    ];
+
+    const tbody = document.getElementById('tbody');
+    const notice = document.getElementById('notice');
+    const createPanel = document.getElementById('createPanel');
+    const drawer = document.getElementById('drawer');
+    const drawerBack = document.getElementById('drawerBack');
+    const drawerTitle = document.getElementById('drawerTitle');
+    const membershipList = document.getElementById('membershipList');
+    const pageInfo = document.getElementById('pageInfo');
+    const btnPrev = document.getElementById('btnPrev');
+    const btnNext = document.getElementById('btnNext');
+
+    let page = 1;
+    let pageSize = 20;
+    let total = 0;
+    let keyword = '';
+    let projectsCache = null;
+    let editingUserId = null;
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function showNotice(text, isError) {
+      notice.style.display = 'block';
+      notice.textContent = text;
+      notice.style.background = isError ? '#ffebee' : '#fff8e9';
+      notice.style.color = isError ? '#d74652' : '#8a6420';
+      notice.style.borderColor = isError ? '#ffcdd2' : '#ffe8ba';
+    }
+
+    function formatTime(value) {
+      if (!value) return '—';
+      const d = new Date(value);
+      return isNaN(d.getTime()) ? '—' : d.toLocaleString('zh-CN', { hour12: false });
+    }
+
+    async function loadProjects() {
+      if (!projectsCache) {
+        projectsCache = await LogPilotApi.api('/api/v1/projects');
+      }
+      return projectsCache;
+    }
+
+    async function load() {
+      try {
+        const q = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+        if (keyword) q.set('keyword', keyword);
+        const data = await LogPilotApi.api('/api/v1/users?' + q.toString());
+        total = data.total;
+        render(data.items);
+      } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">${escapeHtml(e.message)}</td></tr>`;
+      }
+    }
+
+    function render(items) {
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="muted">没有匹配的用户。</td></tr>';
+      } else {
+        tbody.innerHTML = items.map(u => {
+          const isSelf = u.id === CURRENT_USER_ID;
+          const toggle = u.status === 'enabled'
+            ? `<button class="btn" data-disable="${u.id}" type="button"${isSelf ? ' disabled' : ''}>停用</button>`
+            : `<button class="btn" data-enable="${u.id}" type="button">启用</button>`;
+          const adminToggle = u.isSystemAdmin
+            ? `<button class="btn" data-demote="${u.id}" type="button">取消管理员</button>`
+            : `<button class="btn" data-promote="${u.id}" type="button">设为管理员</button>`;
+          return `
+          <tr>
+            <td><strong>${escapeHtml(u.username)}</strong>${isSelf ? ' <span class="muted">(我)</span>' : ''}</td>
+            <td>${escapeHtml(u.displayName || '')}</td>
+            <td>${u.isSystemAdmin ? '<span class="pill">系统管理员</span>' : '<span class="muted">普通用户</span>'}</td>
+            <td><span class="pill">${u.status === 'enabled' ? '启用' : '停用'}</span></td>
+            <td class="muted">${escapeHtml(formatTime(u.lastLoginAt))}</td>
+            <td>
+              <button class="btn" data-members="${u.id}" data-name="${escapeHtml(u.username)}" type="button">项目授权</button>
+              <button class="btn" data-password="${u.id}" data-name="${escapeHtml(u.username)}" type="button">重置密码</button>
+              ${adminToggle}
+              ${toggle}
+            </td>
+          </tr>`;
+        }).join('');
+      }
+
+      const maxPage = Math.max(1, Math.ceil(total / pageSize));
+      pageInfo.textContent = `第 ${page} / ${maxPage} 页 · 共 ${total} 条`;
+      btnPrev.disabled = page <= 1;
+      btnNext.disabled = page >= maxPage;
+    }
+
+    async function patchUser(id, body, okText) {
+      try {
+        await LogPilotApi.api('/api/v1/users/' + id, { method: 'PATCH', body });
+        showNotice(okText);
+        projectsCache = null;
+        await load();
+      } catch (e) {
+        showNotice(e.message || '操作失败', true);
+      }
+    }
+
+    async function openMemberships(userId, username) {
+      editingUserId = userId;
+      drawerTitle.textContent = `项目授权 · ${username}`;
+      membershipList.innerHTML = '<div class="muted">加载中…</div>';
+      drawer.classList.add('open');
+      drawerBack.classList.add('open');
+      try {
+        const [projects, memberships] = await Promise.all([
+          loadProjects(),
+          LogPilotApi.api(`/api/v1/users/${userId}/memberships`)
+        ]);
+        const current = new Map(memberships.map(m => [m.projectId, m.role]));
+        if (!projects.length) {
+          membershipList.innerHTML = '<div class="muted">暂无项目，请先在项目管理中创建项目。</div>';
+          return;
+        }
+        membershipList.innerHTML = projects.map(p => `
+          <div class="line" style="display:grid;grid-template-columns:1fr 190px;gap:10px;align-items:center">
+            <div>
+              <strong>${escapeHtml(p.name)}</strong>
+              <div class="muted" style="font-size:12px">${escapeHtml(p.code)}</div>
+            </div>
+            <select class="field" data-project="${p.id}">
+              ${ROLES.map(r => {
+                const role = current.get(p.id) || '';
+                const apiRole = role ? role.charAt(0).toUpperCase() + role.slice(1) : '';
+                return `<option value="${r.value}"${apiRole === r.value ? ' selected' : ''}>${r.label}</option>`;
+              }).join('')}
+            </select>
+          </div>`).join('');
+      } catch (e) {
+        membershipList.innerHTML = `<div class="muted">${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function closeDrawer() {
+      drawer.classList.remove('open');
+      drawerBack.classList.remove('open');
+      editingUserId = null;
+    }
+
+    document.getElementById('btnNew').addEventListener('click', () => { createPanel.style.display = 'block'; });
+    document.getElementById('btnCancel').addEventListener('click', () => { createPanel.style.display = 'none'; });
+    document.getElementById('btnCreate').addEventListener('click', async () => {
+      try {
+        await LogPilotApi.api('/api/v1/users', {
+          method: 'POST',
+          body: {
+            username: document.getElementById('username').value.trim(),
+            displayName: document.getElementById('displayName').value.trim(),
+            password: document.getElementById('password').value,
+            isSystemAdmin: document.getElementById('isAdmin').checked
+          }
+        });
+        createPanel.style.display = 'none';
+        document.getElementById('username').value = '';
+        document.getElementById('displayName').value = '';
+        document.getElementById('password').value = '';
+        document.getElementById('isAdmin').checked = false;
+        showNotice('用户已创建');
+        projectsCache = null;
+        await load();
+      } catch (e) {
+        showNotice(e.message || '创建失败', true);
+      }
+    });
+
+    document.getElementById('btnSearch').addEventListener('click', () => {
+      keyword = document.getElementById('keyword').value.trim();
+      page = 1;
+      load();
+    });
+
+    document.getElementById('keyword').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('btnSearch').click();
+    });
+
+    btnPrev.addEventListener('click', () => { if (page > 1) { page--; load(); } });
+    btnNext.addEventListener('click', () => {
+      if (page < Math.max(1, Math.ceil(total / pageSize))) { page++; load(); }
+    });
+
+    document.getElementById('btnCloseDrawer').addEventListener('click', closeDrawer);
+    drawerBack.addEventListener('click', closeDrawer);
+
+    document.getElementById('btnSaveMemberships').addEventListener('click', async () => {
+      if (!editingUserId) return;
+      const memberships = Array.from(membershipList.querySelectorAll('select[data-project]'))
+        .filter(sel => sel.value !== '')
+        .map(sel => ({ projectId: Number(sel.dataset.project), role: sel.value }));
+      try {
+        await LogPilotApi.api(`/api/v1/users/${editingUserId}/memberships`, {
+          method: 'PUT',
+          body: { memberships }
+        });
+        closeDrawer();
+        showNotice('项目授权已保存');
+      } catch (e) {
+        showNotice(e.message || '保存失败', true);
+      }
+    });
+
+    tbody.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+
+      const membersId = btn.getAttribute('data-members');
+      if (membersId) { await openMemberships(Number(membersId), btn.getAttribute('data-name')); return; }
+
+      const passwordId = btn.getAttribute('data-password');
+      if (passwordId) {
+        const pwd = prompt(`为 ${btn.getAttribute('data-name')} 设置新密码（8–128 位）`);
+        if (!pwd) return;
+        try {
+          await LogPilotApi.api(`/api/v1/users/${passwordId}/password`, {
+            method: 'POST',
+            body: { password: pwd }
+          });
+          showNotice('密码已重置');
+        } catch (err) {
+          showNotice(err.message || '重置失败', true);
+        }
+        return;
+      }
+
+      const promoteId = btn.getAttribute('data-promote');
+      if (promoteId) { await patchUser(promoteId, { isSystemAdmin: true }, '已设为系统管理员'); return; }
+
+      const demoteId = btn.getAttribute('data-demote');
+      if (demoteId && confirm('取消系统管理员后，该用户将只能看到被授权的项目。确认？')) {
+        await patchUser(demoteId, { isSystemAdmin: false }, '已取消系统管理员');
+        return;
+      }
+
+      const disableId = btn.getAttribute('data-disable');
+      if (disableId && confirm('停用后该用户将立即无法登录，确认？')) {
+        await patchUser(disableId, { enabled: false }, '用户已停用');
+        return;
+      }
+
+      const enableId = btn.getAttribute('data-enable');
+      if (enableId) { await patchUser(enableId, { enabled: true }, '用户已启用'); }
+    });
+
+    load();
+  })();
+</script>
+}

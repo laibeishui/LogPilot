@@ -54,6 +54,39 @@ public sealed class SqliteUserRepository : IUserRepository
         return row?.ToModel();
     }
 
+    public async Task<(IReadOnlyList<UserAccount> Items, int Total)> ListAsync(
+        string? keyword,
+        int offset,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = (SqliteConnection)await _connections.OpenConnectionAsync(cancellationToken);
+
+        const string where = "WHERE (@Keyword = '' OR username LIKE @Pattern OR display_name LIKE @Pattern)";
+        var args = new
+        {
+            Keyword = keyword ?? string.Empty,
+            Pattern = "%" + (keyword ?? string.Empty) + "%",
+            Offset = Math.Max(0, offset),
+            Limit = Math.Max(1, limit)
+        };
+
+        var total = await db.ExecuteScalarAsync<int>(
+            $"SELECT COUNT(1) FROM lp_user {where};", args);
+
+        var rows = await db.QueryAsync<UserRow>(
+            $"""
+            SELECT id, username, display_name, password_hash, status, is_system_admin,
+                   created_at, updated_at, last_login_at
+            FROM lp_user
+            {where}
+            ORDER BY id
+            LIMIT @Limit OFFSET @Offset;
+            """, args);
+
+        return (rows.Select(x => x.ToModel()).ToList(), total);
+    }
+
     public async Task<long> InsertAsync(UserAccount user, CancellationToken cancellationToken = default)
     {
         await using var db = (SqliteConnection)await _connections.OpenConnectionAsync(cancellationToken);
@@ -74,6 +107,45 @@ public sealed class SqliteUserRepository : IUserRepository
                 UpdatedAt = SqliteTime.ToDb(user.UpdatedAt),
                 LastLoginAt = user.LastLoginAt is null ? null : SqliteTime.ToDb(user.LastLoginAt.Value)
             });
+    }
+
+    public async Task UpdateAsync(UserAccount user, CancellationToken cancellationToken = default)
+    {
+        await using var db = (SqliteConnection)await _connections.OpenConnectionAsync(cancellationToken);
+        await db.ExecuteAsync(
+            """
+            UPDATE lp_user
+            SET display_name = @DisplayName,
+                password_hash = @PasswordHash,
+                status = @Status,
+                is_system_admin = @IsSystemAdmin,
+                updated_at = @UpdatedAt
+            WHERE id = @Id;
+            """,
+            new
+            {
+                user.Id,
+                user.DisplayName,
+                user.PasswordHash,
+                Status = (int)user.Status,
+                IsSystemAdmin = user.IsSystemAdmin ? 1 : 0,
+                UpdatedAt = SqliteTime.ToDb(user.UpdatedAt)
+            });
+    }
+
+    public async Task<bool> UsernameExistsAsync(
+        string username,
+        long? excludeUserId = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = (SqliteConnection)await _connections.OpenConnectionAsync(cancellationToken);
+        var count = await db.ExecuteScalarAsync<int>(
+            """
+            SELECT COUNT(1) FROM lp_user
+            WHERE username = @Username AND (@ExcludeId IS NULL OR id <> @ExcludeId);
+            """,
+            new { Username = username, ExcludeId = excludeUserId });
+        return count > 0;
     }
 
     public async Task UpdateLastLoginAsync(long userId, DateTimeOffset lastLoginAt, CancellationToken cancellationToken = default)

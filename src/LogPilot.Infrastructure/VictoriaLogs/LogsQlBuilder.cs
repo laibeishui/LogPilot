@@ -14,9 +14,51 @@ public static class LogsQlBuilder
         "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"
     };
 
+    /// <summary>关键词匹配的字段：消息正文 + 异常信息三件套。</summary>
+    private static readonly string[] KeywordFields =
+    {
+        "_msg", "exception_message", "exception_stack", "exception_type"
+    };
+
+    private const int MaxKeywordTerms = 8;
+
+    private const int MaxKeywordTermLength = 200;
+
     public static string BuildSearch(AuthorizedLogQuery query)
     {
         var sb = new StringBuilder();
+        AppendSearchFilters(sb, query);
+
+        // event_id 为次级排序键：同一毫秒内可能有多条日志，仅按 _time 排序时顺序不稳定，
+        // 会导致分页出现重复或遗漏。
+        sb.Append(" | sort by (_time desc, event_id)");
+
+        // VictoriaLogs 的 offset 是独立管道（| offset N | limit M），不能写成 limit N offset M。
+        if (query.Offset > 0)
+        {
+            sb.Append(" | offset ").Append(query.Offset.ToString(CultureInfo.InvariantCulture));
+        }
+
+        sb.Append(" | limit ")
+            .Append(Math.Clamp(query.PageSize, 1, 100).ToString(CultureInfo.InvariantCulture));
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// 构造与 <see cref="BuildSearch"/> 相同筛选条件下的总数统计查询。
+    /// </summary>
+    public static string BuildSearchCount(AuthorizedLogQuery query)
+    {
+        var sb = new StringBuilder();
+        AppendSearchFilters(sb, query);
+        sb.Append(" | stats count()");
+        return sb.ToString();
+    }
+
+    /// <summary>追加时间窗与筛选条件（供检索与计数复用）。</summary>
+    private static void AppendSearchFilters(StringBuilder sb, AuthorizedLogQuery query)
+    {
         AppendTimeRange(sb, query.StartTime, query.EndTime);
         sb.Append(' ');
         AppendStreamFilter(sb, query.ProjectId, query.Services);
@@ -43,18 +85,13 @@ public static class LogsQlBuilder
 
         if (!string.IsNullOrWhiteSpace(query.Keyword))
         {
-            sb.Append(' ').Append(Quote(query.Keyword.Trim()));
+            AppendKeywordFilter(sb, query.Keyword);
         }
 
         if (!string.IsNullOrWhiteSpace(query.TraceId))
         {
             sb.Append(" trace_id:").Append(Quote(query.TraceId.Trim()));
         }
-
-        // 多取 1 条用于判断 HasMore；排序按时间降序
-        var limit = Math.Clamp(query.PageSize, 1, 100) + 1;
-        sb.Append(" | sort by (_time desc) | limit ").Append(limit.ToString(CultureInfo.InvariantCulture));
-        return sb.ToString();
     }
 
     public static string BuildGetByEventId(long projectId, string eventId, DateTimeOffset start, DateTimeOffset end)
@@ -86,6 +123,7 @@ public static class LogsQlBuilder
         DateTimeOffset start,
         DateTimeOffset end,
         string? serviceName,
+        string? environment,
         IReadOnlyList<string> levels,
         string? keyword,
         string? exceptionType)
@@ -97,7 +135,7 @@ public static class LogsQlBuilder
         var services = string.IsNullOrWhiteSpace(serviceName)
             ? Array.Empty<string>()
             : new[] { serviceName.Trim() };
-        AppendStreamFilter(sb, projectId, services);
+        AppendStreamFilter(sb, projectId, services, environment);
 
         if (levels.Count > 0)
         {
@@ -121,7 +159,7 @@ public static class LogsQlBuilder
 
         if (!string.IsNullOrWhiteSpace(keyword))
         {
-            sb.Append(' ').Append(Quote(keyword.Trim()));
+            AppendKeywordFilter(sb, keyword);
         }
 
         if (!string.IsNullOrWhiteSpace(exceptionType))
@@ -224,11 +262,40 @@ public static class LogsQlBuilder
 
         if (!string.IsNullOrWhiteSpace(keyword))
         {
-            sb.Append(' ').Append(Quote(keyword.Trim()));
+            AppendKeywordFilter(sb, keyword);
         }
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// 追加关键词过滤器：按空白切词，逐词在消息正文与异常字段上做子串匹配（*"..."*），词之间为 AND。
+    /// 子串匹配不走词索引，性能由调用方通过时间窗控制。
+    /// </summary>
+    private static void AppendKeywordFilter(StringBuilder sb, string keyword)
+    {
+        var terms = keyword
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length <= MaxKeywordTermLength)
+            .Take(MaxKeywordTerms)
+            .ToList();
+
+        if (terms.Count == 0)
+        {
+            return;
+        }
+
+        var groups = terms.Select(term =>
+            "(" + string.Join(
+                " OR ",
+                KeywordFields.Select(field => field + ":" + SubstringLiteral(term))) + ")");
+
+        sb.Append(' ').Append(string.Join(" AND ", groups));
+    }
+
+    /// <summary>子串过滤器字面量：*"..."*。</summary>
+    private static string SubstringLiteral(string value)
+        => "*" + Quote(value) + "*";
 
     private static void AppendTimeRange(StringBuilder sb, DateTimeOffset start, DateTimeOffset end)
     {
@@ -240,9 +307,18 @@ public static class LogsQlBuilder
             .Append(')');
     }
 
-    private static void AppendStreamFilter(StringBuilder sb, long projectId, IReadOnlyList<string> services)
+    /// <summary>
+    /// 追加流过滤器 {project_id=...,environment=...,service_name=...}。
+    /// environment 是流字段（_stream_fields 含 environment），作为流过滤可命中索引，直接参与过滤不做丢弃（否则会放宽匹配范围）。
+    /// </summary>
+    private static void AppendStreamFilter(StringBuilder sb, long projectId, IReadOnlyList<string> services, string? environment = null)
     {
         sb.Append("{project_id=").Append(Quote(projectId.ToString(CultureInfo.InvariantCulture)));
+
+        if (!string.IsNullOrWhiteSpace(environment))
+        {
+            sb.Append(",environment=").Append(Quote(environment.Trim()));
+        }
 
         var cleaned = services
             .Where(s => !string.IsNullOrWhiteSpace(s))

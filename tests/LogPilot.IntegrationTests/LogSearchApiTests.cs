@@ -98,6 +98,9 @@ public sealed class LogSearchApiTests
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(1, body.GetProperty("items").GetArrayLength());
         Assert.Equal("evt_demo", body.GetProperty("items")[0].GetProperty("id").GetString());
+        Assert.Equal(1, body.GetProperty("total").GetInt64());
+        Assert.Equal(1, body.GetProperty("page").GetInt32());
+        Assert.Equal(20, body.GetProperty("pageSize").GetInt32());
     }
 
     private static WebApplicationFactory<Program> CreateFactory(ILogSearcher searcher)
@@ -130,7 +133,7 @@ public sealed class LogSearchApiTests
                         Message = "hello"
                     }
                 ],
-                HasMore = false
+                Total = 1
             });
 
         public Task<LogDetail?> GetByEventIdAsync(
@@ -161,6 +164,7 @@ public sealed class LogSearchApiTests
             DateTimeOffset startTime,
             DateTimeOffset endTime,
             string? serviceName,
+            string? environment,
             IReadOnlyList<string> levels,
             string? keyword,
             string? exceptionType,

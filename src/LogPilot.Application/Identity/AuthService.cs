@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using LogPilot.Application.Common;
 using LogPilot.Core.Abstractions;
 using LogPilot.Core.Enums;
@@ -8,8 +7,6 @@ namespace LogPilot.Application.Identity;
 
 public sealed class AuthService : IAuthService
 {
-    private static readonly Regex UsernamePattern = new(@"^[a-zA-Z0-9_\-.]{3,64}$", RegexOptions.Compiled);
-
     private readonly IUserRepository _users;
     private readonly IPasswordHasher _passwordHasher;
 
@@ -109,15 +106,5 @@ public sealed class AuthService : IAuthService
     }
 
     private static void ValidateCredentials(string username, string password)
-    {
-        if (string.IsNullOrWhiteSpace(username) || !UsernamePattern.IsMatch(username.Trim()))
-        {
-            throw new AppException("INVALID_ARGUMENT", "用户名需为 3–64 位字母、数字、下划线、点或短横线。");
-        }
-
-        if (string.IsNullOrWhiteSpace(password) || password.Length < 8 || password.Length > 128)
-        {
-            throw new AppException("INVALID_ARGUMENT", "密码长度需为 8–128 位。");
-        }
-    }
+        => UserCredentialRules.Validate(username, password);
 }

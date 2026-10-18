@@ -30,9 +30,13 @@ public sealed class SqliteAlertRuleRepository : IAlertRuleRepository
     public async Task<IReadOnlyList<AlertRule>> ListEnabledAsync(CancellationToken cancellationToken = default)
     {
         await using var db = (SqliteConnection)await _connections.OpenConnectionAsync(cancellationToken);
+        // 只评估启用规则，且其所属项目必须处于启用状态：停用项目后不应再产生告警与通知。
         var rows = await db.QueryAsync<RuleRow>(
             """
-            SELECT * FROM lp_alert_rule WHERE enabled = 1 ORDER BY id;
+            SELECT r.* FROM lp_alert_rule r
+            INNER JOIN lp_project p ON p.id = r.project_id
+            WHERE r.enabled = 1 AND p.status = 1
+            ORDER BY r.id;
             """);
         return rows.Select(x => x.ToModel()).ToList();
     }

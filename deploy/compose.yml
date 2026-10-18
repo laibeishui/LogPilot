@@ -25,7 +25,7 @@ services:
       Storage__VictoriaLogs__TimeoutSeconds: "${VICTORIALOGS_TIMEOUT_SECONDS:-10}"
       Ingestion__MaxBatchRecords: "${INGEST_MAX_BATCH:-500}"
       Ingestion__MaxBodyBytes: "${INGEST_MAX_BODY_BYTES:-1048576}"
-      Query__MaxRangeHours: "${QUERY_MAX_RANGE_HOURS:-24}"
+      Ingestion__MaxRequestsPerMinute: "${INGEST_MAX_REQUESTS_PER_MINUTE:-600}"
       Alerting__ConfigKey: "${ALERTING_CONFIG_KEY:-}"
     volumes:
       - ${LOGPILOT_DATA_PATH:-logpilot-data}:/app/data

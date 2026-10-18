@@ -55,6 +55,7 @@ graph TD
 ```
 
 > VictoriaLogs 中的 `project_id` 不是 SQLite 外键；必须由写入 API 从密钥绑定项目注入，不能直接相信客户端填写的项目字段。
+> `lp_project_member.role` 取值为 `owner` / `admin` / `viewer`（`CHECK` 约束），主键为 `(project_id, user_id)`；项目可见性由该成员关系驱动。
 
 ## 4. SQLite 建表 SQL（V0.1 可执行初稿）
 
@@ -155,11 +156,15 @@ COMMIT;
 |---|---|---|
 | `lp_user` | 本地管理员及成员登录 | `username` 唯一；密码只能保存带盐的安全哈希，禁止明文及自制 SHA-256 密码算法 |
 | `lp_project` | 日志归属和访问边界 | `code` 稳定且唯一；停用后禁用写入 |
-| `lp_project_member` | 项目用户权限 | `owner` / `admin` / `viewer`；所有查询必须检查授权 |
+| `lp_project_member` | 项目用户权限 | `role` 取值为 `owner` / `admin` / `viewer`（`CHECK` 约束）；主键 `(project_id, user_id)`，同一用户在同一项目只有一条记录；所有查询必须检查授权 |
 | `lp_application` | 服务展示及管理 | 同一项目内 `service_name` 唯一；可以来自入库服务名映射或显式创建 |
 | `lp_api_key` | 机器接入令牌 | 高熵随机密钥、一次展示、保存哈希、支持撤销与过期；按项目绑定 |
 | `lp_system_setting` | 低频全局设置 | 不存管理员密码或明文 Token |
 | `lp_schema_migration` | 迁移版本 | 每个迁移执行一次，完成后写入版本 |
+
+**项目可见性与成员规则**：
+- 项目可见性由 `lp_project_member` 驱动：`ListAccessibleAsync` 只返回当前用户作为成员的项目；`lp_user.is_system_admin = 1` 的用户绕过该成员检查，可见全部项目。用户在项目内的 owner/admin/viewer 角色决定其在该项目能否管理 API Key 与应用。
+- **零迁移**：本批「人员管理 + 项目隔离」能力未新增任何数据库迁移，完全复用现有表结构（`lp_user.is_system_admin` 与 `lp_project_member` 均已在 `0001_init.sql` 中定义）。同时已移除「创建项目时自动把创建者写为 owner 成员行」的写入，新项目成员由系统管理员显式配置。
 
 ### 4.2 密钥设计
 

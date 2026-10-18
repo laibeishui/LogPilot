@@ -35,7 +35,17 @@ dotnet run --project examples/dotnet-console-ingest
 内容> 10 支付超时
 ```
 
-其它命令：`level Error` / `mode otlp` / `help` / `quit`
+其它命令：`zh`（发送 10 条内置中文样例，含中文异常消息与堆栈）/ `level Error` / `mode otlp` / `help` / `quit`
+
+## 中文检索自测
+
+输入 `zh`（或 `中文`）会一次性发送 10 条中文样例日志，覆盖：
+
+- 中文正文（`用户登录成功`、`数据库连接超时`…）
+- **中文子串**场景：`连接` 只是 `数据库连接超时` 里的一段
+- **异常内容**：2 条带中文 `exceptionMessage` / `exceptionStackTrace`（`未将对象引用设置到对象的实例`、`库存不足：商品编号 SKU-8899`）
+
+发完后在检索页依次试：`超时`、`连接`、`订单`、`库存不足`、`每日对账`，观察哪些能命中、哪些命不中。
 
 ## 在平台上查看
 

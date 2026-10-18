@@ -10,11 +10,16 @@ namespace LogPilot.Web.ApiControllers;
 public sealed class AuthApiController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly IUserManagementService _users;
     private readonly AuthCookieService _cookies;
 
-    public AuthApiController(IAuthService authService, AuthCookieService cookies)
+    public AuthApiController(
+        IAuthService authService,
+        IUserManagementService users,
+        AuthCookieService cookies)
     {
         _authService = authService;
+        _users = users;
         _cookies = cookies;
     }
 
@@ -46,5 +51,21 @@ public sealed class AuthApiController : ControllerBase
 
         var user = await _authService.GetCurrentUserAsync(userId, cancellationToken);
         return user is null ? Unauthorized() : Ok(user);
+    }
+
+    /// <summary>当前用户修改自己的密码。</summary>
+    [Authorize]
+    [HttpPut("password")]
+    public async Task<IActionResult> ChangePassword(
+        [FromBody] ChangePasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!User.TryGetUserId(out var userId))
+        {
+            return Unauthorized();
+        }
+
+        await _users.ChangeOwnPasswordAsync(userId, request, cancellationToken);
+        return Ok(new { ok = true });
     }
 }

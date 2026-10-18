@@ -43,7 +43,7 @@ graph TD
 |---|---|---|
 | 标准 OTLP Logs | `/v1/logs` | 与 OTLP 标准保持兼容，不改为 `/api/v1` |
 | 简单日志写入 | `/api/v1/ingest` | LogPilot 私有 JSON API |
-| 管理与查询 | `/api/v1` | 项目、应用、密钥、日志查询 |
+| 管理与查询 | `/api/v1` | 人员、项目、成员、应用、密钥、日志查询 |
 | 健康检查 | `/health` | 供部署检查，详细信息需要授权 |
 | MVC 页面 | `/`、`/logs`、`/projects` 等 | 返回 Razor 页面，调用同源 Web API |
 
@@ -60,7 +60,7 @@ graph TD
 | 凭据 | 适用接口 | 权限 |
 |---|---|---|
 | Ingest API Key | `/v1/logs`、`/api/v1/ingest/logs` | 只能向绑定项目写日志 |
-| 管理员会话（HttpOnly Cookie） | `/api/v1/projects`、`/api/v1/logs` 等 | 根据 SQLite 项目成员角色读取/管理 |
+| 用户会话（HttpOnly Cookie） | `/api/v1/projects`、`/api/v1/users`、`/api/v1/logs` 等 | 按 SQLite 项目成员角色读取/管理；系统管理员可跨项目访问，并独占人员与项目成员配置 |
 
 API Key 由 SQLite 的 `lp_api_key` 表管理；密钥仅展示一次，服务端存储哈希，可撤销、到期。不要写在文档、镜像、GitHub 或生产日志中。
 
@@ -71,17 +71,23 @@ API Key 由 SQLite 的 `lp_api_key` 表管理；密钥仅展示一次，服务�
 3. VictoriaLogs 仅通过内网由 LogPilot 访问，避免客户绕过 LogPilot 查询别的项目。
 4. 首版使用明确的结构化 `project_id` 字段实现隔离；若以后采用 VictoriaLogs 原生多租户 Header，需对读写双方同时映射并回归验证。
 5. 用户可传入 `service.name`、`deployment.environment.name` 等资源信息，但项目标识、摄入时间、服务器接收状态由平台决定。
+6. 管理 API（项目、应用、接入密钥、日志查询）一律在服务端按**用户 ID + 项目成员关系**校验；系统管理员绕过项目成员检查，可跨项目访问。
+7. 客户端传入的 `projectId` 不能越权访问；请求的目标项目不属于当前用户的授权范围时返回 `403`。
 
 ### 4.3 权限模型
 
-| 角色 | 项目查看与日志查询 | 管理项目成员 | 创建/吊销接入 Key |
-|---|---|---|---|
-| Viewer | 是 | 否 | 否 |
-| Editor | 是 | 否 | 经项目策略授权 |
-| Owner | 是 | 是 | 是 |
-| Platform Admin | 全部项目 | 是 | 是 |
+| 角色 | 项目查看与日志查询 | 管理项目成员 | 管理应用与接入 Key | 创建项目 | 人员管理 |
+|---|---|---|---|---|---|
+| 系统管理员（`lp_user.is_system_admin = 1`） | 全部项目 | 是（全部项目，独占配置） | 是（全部项目） | 是 | 是（独占） |
+| 项目 owner | 是 | 否（仅系统管理员可配置） | 是（本项目） | 否 | 否 |
+| 项目 admin | 是 | 否（仅系统管理员可配置） | 是（本项目） | 否 | 否 |
+| 项目 viewer | 是 | 否 | 否 | 否 | 否 |
 
-V0.1 如仅落地管理员和 Viewer 两种角色，应在 UI 中隐藏尚未实现的权限功能，不得仅依靠前端控制。
+- **系统管理员**由 `lp_user.is_system_admin = 1` 标识：可访问全部项目，绕过项目成员检查；**独占**人员管理与项目成员配置；**创建项目仅其可调用**。
+- **项目 owner / admin**：可查看项目日志、可管理该项目的 API Key 与应用（按 `IProjectAccessService.EnsureCanManageAsync`）。项目成员的增删改**不在**项目角色权限内，统一由系统管理员在「人员管理 → 项目授权」或「项目管理 → 成员」中配置。
+- **项目 viewer**：仅可查看项目日志。
+- `GET /api/v1/projects` 只返回**当前用户为成员的项目**（系统管理员返回全部）。
+- V0.1 不再存在 `Editor` 或 `Platform Admin` 角色；`Editor` 未实现，旧表述作废。
 
 ## 5. OTLP/HTTP Protobuf 日志摄入（主要入口）
 
@@ -220,23 +226,35 @@ Content-Type: application/json
 | 503 | `STORAGE_UNAVAILABLE` | 存储不可用，可限次退避重试 |
 | 504 | `STORAGE_TIMEOUT` | 下游超时；写入是否成功可能未知，重试应考虑重复 |
 
+> `409 CONFLICT` 除名称/状态冲突外，还用于**防自锁**场景：不能停用当前登录账号，也不能停用或取消最后一个启用状态的系统管理员；用户名重复同样返回 `409`。`403 PROJECT_ACCESS_DENIED` 用于项目越权（不属于当前用户授权范围，且非系统管理员）；`404 NOT_FOUND` 用于目标资源不存在（含跨项目资源，避免泄露存在性）。
+
 ### 7.2 OTLP 特殊约定
 
 OTLP 错误不得照搬上述自定义 JSON 结构。该端点使用标准 Protobuf 响应/错误消息，并区分可重试与不可重试 HTTP 状态。完整实现依照 OpenTelemetry OTLP specification。
 
-## 8. 登录、项目、应用、密钥管理 API
+## 8. 登录、人员、项目、成员、应用、密钥管理 API
 
-V0.1 提供以下最小管理接口；列表默认按当前用户有权访问的项目过滤。
+V0.1 提供以下最小管理接口；列表默认按当前用户有权访问的项目过滤。人员管理与项目成员配置仅系统管理员可调用（普通用户 `403`）。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/api/v1/auth/login` | 用户登录，建立安全会话 |
 | `POST` | `/api/v1/auth/logout` | 登出与会话失效 |
 | `GET` | `/api/v1/auth/me` | 当前用户信息 |
-| `GET` | `/api/v1/projects` | 可访问项目列表 |
-| `POST` | `/api/v1/projects` | 创建项目 |
+| `PUT` | `/api/v1/auth/password` | 修改本人密码（需校验原密码） |
+| `GET` | `/api/v1/users` | 用户列表，支持 `keyword`、`page`、`pageSize`（仅系统管理员） |
+| `POST` | `/api/v1/users` | 新建用户（仅系统管理员） |
+| `PATCH` | `/api/v1/users/{id}` | 修改显示名/系统管理员标志/启用状态（仅系统管理员） |
+| `POST` | `/api/v1/users/{id}/password` | 管理员重置指定用户密码（仅系统管理员） |
+| `GET` | `/api/v1/users/{id}/memberships` | 查询某用户的项目授权（仅系统管理员） |
+| `PUT` | `/api/v1/users/{id}/memberships` | 整体替换某用户的项目授权（仅系统管理员） |
+| `GET` | `/api/v1/projects` | 可访问项目列表（含 `memberCount`） |
+| `POST` | `/api/v1/projects` | 创建项目（仅系统管理员） |
 | `GET` | `/api/v1/projects/{id}` | 项目详情 |
 | `PATCH` | `/api/v1/projects/{id}` | 修改名称和基础配置 |
+| `GET` | `/api/v1/projects/{id}/members` | 项目成员列表（仅系统管理员） |
+| `POST` | `/api/v1/projects/{id}/members` | 新增或更新项目成员角色（仅系统管理员） |
+| `DELETE` | `/api/v1/projects/{id}/members/{userId}` | 移除项目成员（仅系统管理员） |
 | `GET` | `/api/v1/projects/{id}/applications` | 应用列表 |
 | `POST` | `/api/v1/projects/{id}/applications` | 新增应用 |
 | `GET` | `/api/v1/projects/{id}/api-keys` | Key 元数据列表，不返回明文 |
@@ -259,9 +277,12 @@ Content-Type: application/json
   "id": "prj_001",
   "name": "HiLink",
   "code": "hilink",
+  "memberCount": 0,
   "createdAt": "2026-10-13T03:00:00Z"
 }
 ```
+
+> **仅系统管理员可创建项目**，其他角色调用返回 `403`。创建者**不再自动成为项目 owner**；新项目 `memberCount` 为 `0`，成员需在「项目成员」中显式配置。响应体新增 `memberCount` 字段。
 
 `code` 在系统内唯一；修改 code 时应明确是否影响已有 Key 和日志查询，不允许静默破坏关联。数据库 ID 可继续用整数，API 对外标识应在实现前统一固定。
 
@@ -283,6 +304,166 @@ Content-Type: application/json
 
 `apiKey` 只在本次创建响应中返回，之后仅可查看 `prefix`、创建时间、过期时间和状态。
 
+### 8.3 人员管理 API（仅系统管理员）
+
+以下端点均要求系统管理员策略，普通用户访问返回 `403`。
+
+**用户列表** `GET /api/v1/users?keyword=&page=1&pageSize=20`
+
+```json
+{
+  "items": [
+    {
+      "id": 1,
+      "username": "admin",
+      "displayName": "系统管理员",
+      "status": "enabled",
+      "isSystemAdmin": true,
+      "createdAt": "2026-10-13T03:00:00Z",
+      "updatedAt": "2026-10-13T03:00:00Z",
+      "lastLoginAt": "2026-10-15T08:30:00Z"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+- `items` 为 `UserDto` 数组，字段固定为 `id`、`username`、`displayName`、`status`、`isSystemAdmin`、`createdAt`、`updatedAt`、`lastLoginAt`；`status` 取值为 `"enabled"` 或 `"disabled"`。
+- `keyword` 可选，匹配用户名/显示名；`page` 从 1 开始（默认 1），`pageSize` 默认 20、上限 100。
+
+**新建用户** `POST /api/v1/users`
+
+```json
+{
+  "username": "alice",
+  "password": "S3cret-pass",
+  "displayName": "Alice",
+  "isSystemAdmin": false
+}
+```
+
+```json
+{
+  "id": 2,
+  "username": "alice",
+  "displayName": "Alice",
+  "status": "enabled",
+  "isSystemAdmin": false,
+  "createdAt": "2026-10-16T02:00:00Z",
+  "updatedAt": "2026-10-16T02:00:00Z",
+  "lastLoginAt": null
+}
+```
+
+- 校验规则：用户名长度 `3–64` 位，且仅允许 `[a-zA-Z0-9_\-.]`；密码长度 `8–128` 位。
+- `displayName` 可选，省略时回退为用户名；超过 100 字符返回 `400`。
+
+**修改用户** `PATCH /api/v1/users/{id}`（仅更新显式提供的字段）
+
+```json
+{
+  "displayName": "Alice Wang",
+  "isSystemAdmin": false,
+  "enabled": true
+}
+```
+
+- `displayName`、`isSystemAdmin`、`enabled` 均可选；省略字段保持原值，返回更新后的单个 `UserDto`。
+
+**管理员重置密码** `POST /api/v1/users/{id}/password`
+
+```json
+{ "password": "N3w-pass-2026" }
+```
+
+```json
+{ "ok": true }
+```
+
+**错误码**：
+
+| HTTP | 错误码 | 场景 |
+|---|---|---|
+| 400 | `INVALID_ARGUMENT` | 用户名格式、密码长度或显示名非法 |
+| 409 | `CONFLICT` | 用户名重复；或触发防自锁校验 |
+| 404 | `NOT_FOUND` | 目标用户不存在 |
+
+- **防自锁（409）**：不能停用当前登录账号；不能取消或停用最后一个启用状态的系统管理员。
+
+### 8.4 项目成员与用户授权（仅系统管理员）
+
+项目成员端点以「项目视角」返回成员列表；用户授权端点以「用户视角」整体替换其项目授权。以下端点均要求系统管理员策略。
+
+**项目成员列表** `GET /api/v1/projects/{id}/members`
+
+```json
+[
+  {
+    "userId": 2,
+    "username": "alice",
+    "displayName": "Alice",
+    "role": "viewer",
+    "createdAt": "2026-10-16T02:00:00Z"
+  }
+]
+```
+
+**新增或更新成员角色** `POST /api/v1/projects/{id}/members`
+
+```json
+{ "userId": 2, "role": "Admin" }
+```
+
+返回更新后的成员列表（结构同上）。`userId` 对应的用户不存在返回 `404`。
+
+**移除成员** `DELETE /api/v1/projects/{id}/members/{userId}`
+
+返回移除后的成员列表（结构同上）。
+
+**查询用户的项目授权** `GET /api/v1/users/{id}/memberships`
+
+```json
+[
+  { "projectId": 1, "projectCode": "hilink", "projectName": "HiLink", "role": "viewer" }
+]
+```
+
+**整体替换用户的项目授权** `PUT /api/v1/users/{id}/memberships`
+
+```json
+{
+  "memberships": [
+    { "projectId": 1, "role": "Viewer" }
+  ]
+}
+```
+
+返回替换后的用户授权列表（结构同上）。
+
+- 语义为**整体替换**：请求体 `memberships` 缺省或为空数组时，撤销该用户的全部项目授权。
+- 同一项目在数组内重复出现返回 `400`（`INVALID_ARGUMENT`）；任一 `projectId` 不存在返回 `404`（`NOT_FOUND`）。
+- `role` 取值为 `owner` / `admin` / `viewer`（对应项目成员角色 `Owner` / `Admin` / `Viewer`；请求传值大小写不敏感，响应统一返回小写）。
+
+### 8.5 修改本人密码
+
+`PUT /api/v1/auth/password`（需登录态，仅能修改本人密码）
+
+```json
+{
+  "currentPassword": "S3cret-pass",
+  "newPassword": "N3w-pass-2026"
+}
+```
+
+```json
+{ "ok": true }
+```
+
+- 必须校验原密码：`currentPassword` 错误或账号已停用返回 `400`（`INVALID_CREDENTIALS`）。
+- `newPassword` 长度 `8–128` 位，否则返回 `400`（`INVALID_ARGUMENT`）。
+
 ## 9. 日志查询 API（LogPilot → VictoriaLogs）
 
 ### 9.1 查询 API 一览
@@ -300,6 +481,7 @@ Content-Type: application/json
 
 > `stats/*` 与 `logs/tail` 均需登录态，并强制 `projectId` 过滤与时间窗限制。
 > `logs/tail` 在连接期间按 `event: log` 推送新日志，客户端断开即释放订阅。
+> 建连时无权访问该项目将直接返回 `403`（`PROJECT_ACCESS_DENIED`，JSON 错误体），不会建立 SSE 连接；连接建立后会按 `Query:StreamRecheckSeconds` 周期重新校验项目权限，撤权时以 `event: denied` 通知并结束流，避免 `EventSource` 反复重连。
 
 ### 9.2 日志搜索请求
 
@@ -317,8 +499,8 @@ Content-Type: application/json
   "levels": ["Error", "Fatal"],
   "keyword": "timeout",
   "traceId": null,
-  "pageSize": 100,
-  "cursor": null
+  "page": 1,
+  "pageSize": 100
 }
 ```
 
@@ -334,12 +516,16 @@ Content-Type: application/json
       "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
     }
   ],
-  "nextCursor": null,
-  "hasMore": false
+  "total": 1280,
+  "page": 1,
+  "pageSize": 100
 }
 ```
 
-**分页限制**：VictoriaLogs 不提供 LogPilot 可以直接照搬的全局稳定游标。首版优先采用“时间锚点 + 稳定事件 ID”实现有界向后翻页，服务端构造下一页时间约束并进行本地去重；同一时间戳下的稳定顺序必须通过集成测试验证。若不能确保稳定无遗漏，V0.1 应限制为最近 N 条 + 向前加载，而不是虚假承诺任意深度稳定分页。
+**分页方式**：采用「页码 + 偏移」分页。请求体 `page`（从 1 开始，默认 1）与 `pageSize`（默认 `Query:DefaultPageSize`，上限 `Query:MaxPageSize`）；服务端换算为 `offset = (page - 1) × pageSize`，落到 LogsQL 的 `limit` + `offset` 管道。同时并行执行一次相同筛选条件下的 `stats count()` 得到总数 `total`，供前端渲染总页数并支持跳页。
+
+> 时间跨度不设上限，`startTime` / `endTime` 可指定任意历史区间；实际可见范围受 VictoriaLogs 保留期约束。
+> 计数失败时 `total` 降级为 `0`（不阻断结果列表返回），前端应能容忍 `total = 0` 的展示。
 
 日志 `id` 应由 LogPilot 产生或根据明确策略映射外部标识；如果从标准 OTLP 导入并无稳定 ID，系统必须补充事件 ID。ID 不能当作 VictoriaLogs 原生主键。
 
@@ -348,7 +534,8 @@ Content-Type: application/json
 LogPilot 在服务端构建 LogsQL：
 
 - 总是先验证项目访问权限；插入强制 `project_id` 过滤。
-- 默认选择最近 15 分钟，可配置最长查询窗口。
+- 默认选择最近 15 分钟；单次查询时间跨度不设上限，实际可见范围受 VictoriaLogs 保留期约束。
+- 分页使用受控的 `limit` / `offset` 管道（由 `page` / `pageSize` 换算），并对结果条数设上限。
 - 使用受控字段白名单组合筛选，不允许客户端任意插入完整 LogsQL 片段。
 - 查询参数和自由文本先按 LogsQL 语法安全转义，防止表达式注入。
 - 限制结果条数、查询超时和并发；详情页不允许无限范围搜索。
@@ -469,6 +656,14 @@ graph TD
 | API-013 | Key 撤销和过期 | 撤销后不能继续写入 |
 | API-014 | 前端 Cookie CSRF | 未携带防伪凭据的变更请求被拒绝 |
 | API-015 | LogPilot 健康检查 | 存活与下游可用状态分别返回 |
+| API-016 | 人员管理接口鉴权 | 仅系统管理员可访问 `/api/v1/users` 与项目成员接口，普通用户返回 `403` |
+| API-017 | 项目列表按成员过滤 | 普通用户的 `GET /api/v1/projects` 只包含其为成员的项目 |
+| API-018 | 越权访问他项目 api-keys | 非成员访问 `GET /api/v1/projects/{id}/api-keys` 返回 `403` |
+| API-019 | 非管理员创建项目 | 普通用户 `POST /api/v1/projects` 返回 `403` |
+| API-020 | 用户项目授权整体替换 | 重复项目授权返回 `400`，项目不存在返回 `404`，空数组撤销全部授权 |
+| API-021 | 停用账号即时失效 | 账号被停用后原会话的下一次请求返回 `401` |
+| API-022 | 系统管理员升降级即时生效 | 变更 `is_system_admin` 后下一次请求即按新权限判定 |
+| API-023 | 修改本人密码 | 需校验原密码，原密码错误返回 `400` |
 
 建议在 GitHub Actions 的集成测试中启动 VictoriaLogs 固定版本 Docker 容器，使用真实 SDK Protobuf 样本进行端到端测试，而非仅做 Controller 单元测试。
 
@@ -487,6 +682,8 @@ graph TD
 ## 15. 决策记录与待验证事项
 
 **已决策**：双 Docker 容器；ASP.NET Core 8 MVC + Web API；Razor + 原生 JS 渐进增强（不强制前端框架）；Dapper + SQLite；VictoriaLogs；SDK/OTLP Protobuf 为主，HTTP JSON 批量为辅；不引入 RabbitMQ。
+
+**已决策（权限与人员管理）**：人员与项目成员配置统一收敛到系统管理员；项目角色保留 `owner` / `admin` / `viewer` 三级；项目可见性由 `lp_project_member` 驱动，零数据库迁移；权限变更通过每请求回查的 `UserStateMiddleware` 即时生效。
 
 **实现前必须验证**：
 

@@ -11,15 +11,18 @@ namespace LogPilot.Web.ApiControllers;
 public sealed class ProjectsApiController : ControllerBase
 {
     private readonly IProjectService _projects;
+    private readonly IProjectMemberService _members;
     private readonly IApplicationService _applications;
     private readonly IApiKeyService _apiKeys;
 
     public ProjectsApiController(
         IProjectService projects,
+        IProjectMemberService members,
         IApplicationService applications,
         IApiKeyService apiKeys)
     {
         _projects = projects;
+        _members = members;
         _applications = applications;
         _apiKeys = apiKeys;
     }
@@ -73,6 +76,33 @@ public sealed class ProjectsApiController : ControllerBase
 
         var project = await _projects.UpdateAsync(userId, User.IsSystemAdmin(), id, request, cancellationToken);
         return Ok(project);
+    }
+
+    [Authorize(Policy = LogPilotPolicies.SystemAdmin)]
+    [HttpGet("{id:long}/members")]
+    public async Task<IActionResult> ListMembers(long id, CancellationToken cancellationToken)
+    {
+        var items = await _members.ListByProjectAsync(id, cancellationToken);
+        return Ok(items);
+    }
+
+    [Authorize(Policy = LogPilotPolicies.SystemAdmin)]
+    [HttpPost("{id:long}/members")]
+    public async Task<IActionResult> AddMember(
+        long id,
+        [FromBody] AddProjectMemberRequest request,
+        CancellationToken cancellationToken)
+    {
+        var items = await _members.AddOrUpdateAsync(id, request, cancellationToken);
+        return Ok(items);
+    }
+
+    [Authorize(Policy = LogPilotPolicies.SystemAdmin)]
+    [HttpDelete("{id:long}/members/{userId:long}")]
+    public async Task<IActionResult> RemoveMember(long id, long userId, CancellationToken cancellationToken)
+    {
+        var items = await _members.RemoveAsync(id, userId, cancellationToken);
+        return Ok(items);
     }
 
     [HttpGet("{id:long}/applications")]

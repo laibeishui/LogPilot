@@ -1,12 +1,17 @@
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using LogPilot.Application;
+using LogPilot.Application.Options;
 using LogPilot.Infrastructure;
+using LogPilot.Infrastructure.Security;
 using LogPilot.Infrastructure.Sqlite;
 using LogPilot.Web.Filters;
 using LogPilot.Web.Middleware;
 using LogPilot.Web.Security;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -65,11 +70,25 @@ builder.Services.AddAuthorization(options =>
     options.FallbackPolicy = new AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
         .Build();
+
+    // 人员/项目管理等仅系统管理员可用（UserStateMiddleware 已在请求早期刷新该标志）。
+    options.AddPolicy(LogPilotPolicies.SystemAdmin, policy => policy.RequireAssertion(
+        context => context.User.IsSystemAdmin()));
 });
 
 builder.Services.AddAntiforgery(options =>
 {
     options.HeaderName = "X-CSRF-TOKEN";
+});
+
+// 日志接入限流：仅作用于接入端点，按接入 Token / 来源 IP 分区。
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        IngestRateLimitPolicy.CreatePartition(
+            context,
+            context.RequestServices.GetRequiredService<IOptions<IngestionLimits>>().Value));
 });
 
 builder.Services.AddLogPilotApplication(builder.Configuration);
@@ -83,17 +102,36 @@ using (var scope = app.Services.CreateScope())
     await migrator.MigrateAsync();
 }
 
+var channelProtector = app.Services.GetRequiredService<ChannelConfigProtector>();
+switch (channelProtector.KeyStatus)
+{
+    case ChannelKeyStatus.NotConfigured:
+        app.Logger.LogWarning(
+            "Alerting:ConfigKey 未配置，通知渠道配置正在使用开发默认密钥加密。生产环境请务必配置有效密钥。");
+        break;
+    case ChannelKeyStatus.Invalid:
+        app.Logger.LogError(
+            "Alerting:ConfigKey 格式无效（{Reason}），已回退到开发默认密钥，通知渠道配置将以公开密钥加密。请修正该配置后重启。",
+            channelProtector.KeyErrorMessage);
+        break;
+}
+
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Home/Error");
     app.UseHsts();
 }
 
+// 必须最外层：保证 /api 请求（含中间件阶段抛出）始终得到统一 JSON 错误体
+app.UseMiddleware<ApiExceptionMiddleware>();
+
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
+app.UseRateLimiter();
 app.UseMiddleware<SetupGateMiddleware>();
 app.UseAuthentication();
+app.UseMiddleware<UserStateMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();

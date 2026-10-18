@@ -30,6 +30,7 @@ public interface ILogSearcher
         DateTimeOffset startTime,
         DateTimeOffset endTime,
         string? serviceName,
+        string? environment,
         IReadOnlyList<string> levels,
         string? keyword,
         string? exceptionType,
@@ -99,18 +100,17 @@ public sealed class AuthorizedLogQuery
     public int PageSize { get; init; } = 50;
 
     /// <summary>
-    /// 时间锚点游标：加载严格早于该时间点的更早日志。
+    /// 分页偏移：跳过的最新日志条数（offset = (page - 1) * pageSize）。
     /// </summary>
-    public string? Cursor { get; init; }
+    public int Offset { get; init; }
 }
 
 public sealed class LogSearchResult
 {
     public required IReadOnlyList<LogSearchItem> Items { get; init; }
 
-    public string? NextCursor { get; init; }
-
-    public bool HasMore { get; init; }
+    /// <summary>匹配条件的日志总数。</summary>
+    public long Total { get; init; }
 }
 
 public sealed class LogSearchItem

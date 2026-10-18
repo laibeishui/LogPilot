@@ -15,6 +15,20 @@
     <button class="btn active" type="button" data-range="15">最近 15 分钟</button>
     <button class="btn" type="button" data-range="60">最近 1 小时</button>
     <button class="btn" type="button" data-range="1440">最近 24 小时</button>
+    <button class="btn" type="button" data-range="custom">自定义</button>
+  </div>
+  <div class="filters" id="customRange" style="display:none;grid-template-columns: minmax(200px,1fr) minmax(200px,1fr) auto;">
+    <div>
+      <label for="startTime">开始时间</label>
+      <input id="startTime" class="field" type="datetime-local" step="1" />
+    </div>
+    <div>
+      <label for="endTime">结束时间</label>
+      <input id="endTime" class="field" type="datetime-local" step="1" />
+    </div>
+    <div>
+      <button class="btn" id="btnApplyCustom" type="button">应用时间</button>
+    </div>
   </div>
   <div class="filters" style="grid-template-columns: minmax(160px,1.4fr) minmax(120px,1fr) minmax(120px,1fr) minmax(160px,1.4fr) minmax(160px,1.2fr) auto auto auto auto;">
     <div>
@@ -76,7 +90,17 @@
   </div>
   <div class="pagination">
     <span class="muted" id="resultMeta">尚未查询</span>
-    <button class="btn" id="btnMore" type="button" style="display:none">加载更早</button>
+    <div id="pageBar" style="display:none;align-items:center;gap:8px;flex-wrap:wrap">
+      <label class="muted" for="pageSize" style="font-size:12px">每页</label>
+      <select id="pageSize" class="field" style="width:auto;padding:4px 8px">
+        <option value="20">20</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+      </select>
+      <button class="btn" id="btnPrev" type="button">上一页</button>
+      <span class="muted" id="pageInfo" style="font-size:12px">-</span>
+      <button class="btn" id="btnNext" type="button">下一页</button>
+    </div>
   </div>
 </div>
 
@@ -104,19 +128,29 @@
     const rangeHint = document.getElementById('rangeHint');
     const resultMeta = document.getElementById('resultMeta');
     const btnSearch = document.getElementById('btnSearch');
-    const btnMore = document.getElementById('btnMore');
     const btnLive = document.getElementById('btnLive');
     const btnPause = document.getElementById('btnPause');
     const drawer = document.getElementById('drawer');
     const drawerBack = document.getElementById('drawerBack');
     const drawerBody = document.getElementById('drawerBody');
+    const customRangeBox = document.getElementById('customRange');
+    const startInput = document.getElementById('startTime');
+    const endInput = document.getElementById('endTime');
+    const pageBar = document.getElementById('pageBar');
+    const pageInfo = document.getElementById('pageInfo');
+    const pageSizeSelect = document.getElementById('pageSize');
+    const btnPrev = document.getElementById('btnPrev');
+    const btnNext = document.getElementById('btnNext');
     const params = new URLSearchParams(location.search);
 
-    let rangeMinutes = Number(params.get('range') || 15);
-    if (![15, 60, 1440].includes(rangeMinutes)) rangeMinutes = 15;
-    let nextCursor = null;
-    let hasMore = false;
-    let lastItems = [];
+    const RELATIVE_RANGES = ['15', '60', '1440'];
+    let rangeMode = params.get('range') || '15';
+    if (!RELATIVE_RANGES.includes(rangeMode) && rangeMode !== 'custom') rangeMode = '15';
+    let customRange = null; // 自定义时间窗（绝对时间）；仅 rangeMode === 'custom' 时使用
+    let page = Math.max(1, Number(params.get('page') || 1));
+    let pageSize = Number(params.get('pageSize') || 50);
+    if (![20, 50, 100].includes(pageSize)) pageSize = 50;
+    let total = 0;
     let lastRange = null;
 
     function escapeHtml(s) {
@@ -147,19 +181,48 @@
 
     function syncRangeTabs() {
       document.querySelectorAll('#rangeTabs .btn').forEach(btn => {
-        btn.classList.toggle('active', Number(btn.dataset.range) === rangeMinutes);
+        btn.classList.toggle('active', btn.dataset.range === rangeMode);
       });
+      customRangeBox.style.display = rangeMode === 'custom' ? '' : 'none';
     }
 
+    // 当前查询时间窗：相对窗口按"现在"计算，自定义窗口使用固定的绝对时间
     function currentRange() {
+      if (rangeMode === 'custom') {
+        return customRange;
+      }
+      const minutes = Number(rangeMode);
       const end = new Date();
-      const start = new Date(end.getTime() - rangeMinutes * 60 * 1000);
+      const start = new Date(end.getTime() - minutes * 60 * 1000);
+      return { start, end };
+    }
+
+    function formatLocalInput(d) {
+      const p = n => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:00`;
+    }
+
+    function fillCustomInputs() {
+      if (!customRange) return;
+      startInput.value = formatLocalInput(customRange.start);
+      endInput.value = formatLocalInput(customRange.end);
+    }
+
+    function readCustomInputs() {
+      if (!startInput.value || !endInput.value) return null;
+      const start = new Date(startInput.value);
+      const end = new Date(endInput.value);
+      if (isNaN(start) || isNaN(end) || start >= end) return null;
       return { start, end };
     }
 
     function updateRangeHint() {
-      const { start, end } = currentRange();
-      rangeHint.textContent = `时间窗：${start.toLocaleString()} ~ ${end.toLocaleString()}（按本机时区展示）`;
+      const range = currentRange();
+      if (!range) {
+        rangeHint.textContent = '请选择开始与结束时间（开始需早于结束）';
+        return;
+      }
+      rangeHint.textContent = `时间窗：${range.start.toLocaleString()} ~ ${range.end.toLocaleString()}（按本机时区展示）`;
     }
 
     async function loadProjects() {
@@ -175,11 +238,12 @@
     async function loadFilters() {
       const projectId = projectSelect.value;
       if (!projectId) return;
-      const { start, end } = currentRange();
+      const range = currentRange();
+      if (!range) return;
       const qs = new URLSearchParams({
         projectId,
-        startTime: start.toISOString(),
-        endTime: end.toISOString()
+        startTime: range.start.toISOString(),
+        endTime: range.end.toISOString()
       });
       try {
         const filters = await LogPilotApi.api('/api/v1/logs/filters?' + qs.toString());
@@ -197,16 +261,12 @@
       }
     }
 
-    function renderRows(items, append) {
-      if (!append) {
-        if (!items.length) {
-          tbody.innerHTML = '<tr><td colspan="5" class="muted">无结果。可放宽时间或清除筛选后重试。</td></tr>';
-          return;
-        }
-        tbody.innerHTML = '';
+    function renderRows(items) {
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="muted">无结果。可放宽时间或清除筛选后重试。</td></tr>';
+        return;
       }
-
-      const html = items.map(item => `
+      tbody.innerHTML = items.map(item => `
         <tr class="clickable" data-id="${escapeHtml(item.id)}" data-ts="${escapeHtml(item.timestamp)}">
           <td>${escapeHtml(new Date(item.timestamp).toLocaleString())}</td>
           <td><span class="tag ${levelClass(item.level)}">${escapeHtml(item.level)}</span></td>
@@ -214,28 +274,42 @@
           <td class="msg" title="${escapeHtml(item.message)}">${escapeHtml(item.message)}</td>
           <td><code>${escapeHtml(item.traceId || '-')}</code></td>
         </tr>`).join('');
-      tbody.insertAdjacentHTML('beforeend', html);
     }
 
-    async function search(append) {
+    function renderPagination() {
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (page > totalPages) page = totalPages;
+      const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+      const to = Math.min(page * pageSize, total);
+      resultMeta.textContent = total === 0
+        ? '无匹配日志'
+        : `共 ${total} 条 · 本页显示第 ${from}-${to} 条`;
+      pageBar.style.display = 'flex';
+      pageInfo.textContent = `第 ${page} / ${totalPages} 页`;
+      btnPrev.disabled = page <= 1;
+      btnNext.disabled = page >= totalPages;
+    }
+
+    async function search() {
       const projectId = projectSelect.value;
       if (!projectId) {
         showNotice('请先创建并选择项目', true);
         return;
       }
 
-      if (!append && liveState !== 'off') stopLive(true);
+      const range = currentRange();
+      if (!range) {
+        showNotice('请填写有效的开始/结束时间（开始需早于结束）', true);
+        return;
+      }
+
+      if (liveState !== 'off') stopLive(true);
 
       hideNotice();
       btnSearch.disabled = true;
-      btnMore.disabled = true;
-      if (!append) {
-        nextCursor = null;
-        lastItems = [];
-        tbody.innerHTML = '<tr><td colspan="5" class="muted">查询中…</td></tr>';
-      }
+      pageBar.style.display = 'none';
+      tbody.innerHTML = '<tr><td colspan="5" class="muted">查询中…</td></tr>';
 
-      const range = currentRange();
       lastRange = range;
       const body = {
         projectId: Number(projectId),
@@ -245,42 +319,41 @@
         levels: levelSelect.value ? [levelSelect.value] : [],
         keyword: keywordInput.value.trim() || null,
         traceId: traceInput.value.trim() || null,
-        pageSize: 50,
-        cursor: append ? nextCursor : null
+        page,
+        pageSize
       };
 
       try {
         const result = await LogPilotApi.api('/api/v1/logs/search', { method: 'POST', body });
-        const items = result.items || [];
-        if (append) lastItems = lastItems.concat(items);
-        else lastItems = items;
-        nextCursor = result.nextCursor || null;
-        hasMore = !!result.hasMore;
-        renderRows(items, append);
-        resultMeta.textContent = `已显示 ${lastItems.length} 条` + (hasMore ? '（还有更早日志）' : '');
-        btnMore.style.display = hasMore ? '' : 'none';
+        total = Number(result.total || 0);
+        page = Number(result.page || page);
+        renderRows(result.items || []);
+        renderPagination();
         updateUrl();
       } catch (e) {
-        if (!append) {
-          tbody.innerHTML = `<tr><td colspan="5">${escapeHtml(e.message || '查询失败')}</td></tr>`;
-          resultMeta.textContent = '查询失败';
-          btnMore.style.display = 'none';
-        }
+        tbody.innerHTML = `<tr><td colspan="5">${escapeHtml(e.message || '查询失败')}</td></tr>`;
+        resultMeta.textContent = '查询失败';
+        pageBar.style.display = 'none';
         showNotice(e.message || '查询失败', true);
       } finally {
         btnSearch.disabled = false;
-        btnMore.disabled = false;
       }
     }
 
     function updateUrl() {
       const q = new URLSearchParams();
       if (projectSelect.value) q.set('projectId', projectSelect.value);
-      q.set('range', String(rangeMinutes));
+      q.set('range', rangeMode);
+      if (rangeMode === 'custom' && customRange) {
+        q.set('start', customRange.start.toISOString());
+        q.set('end', customRange.end.toISOString());
+      }
       if (serviceSelect.value) q.set('service', serviceSelect.value);
       if (levelSelect.value) q.set('level', levelSelect.value);
       if (keywordInput.value.trim()) q.set('keyword', keywordInput.value.trim());
       if (traceInput.value.trim()) q.set('traceId', traceInput.value.trim());
+      q.set('page', String(page));
+      q.set('pageSize', String(pageSize));
       history.replaceState(null, '', '/logs?' + q.toString());
     }
 
@@ -413,6 +486,7 @@
       if (liveSource) liveSource.close();
       tbody.dataset.placeholder = '1';
       tbody.innerHTML = '<tr><td colspan="5" class="muted">实时连接中…</td></tr>';
+      pageBar.style.display = 'none';
       liveReceived = 0;
       liveBuffer = [];
       liveState = 'running';
@@ -437,8 +511,30 @@
         updateLiveMeta();
       });
 
+      source.addEventListener('denied', (e) => {
+        let reason = '当前账号已无权访问该项目';
+        try {
+          const data = JSON.parse(e.data);
+          if (data && data.message) reason = data.message;
+        } catch { /* 忽略解析失败 */ }
+        stopLive(true);
+        tbody.dataset.placeholder = '1';
+        tbody.innerHTML = '<tr><td colspan="5" class="muted">实时连接已终止</td></tr>';
+        resultMeta.textContent = '实时已终止';
+        showNotice('实时连接已终止：' + reason, true);
+      });
+
       source.addEventListener('error', () => {
-        if (liveSource) showNotice('实时连接中断，浏览器将自动重连…', true);
+        if (!liveSource) return;
+        if (liveSource.readyState === EventSource.CLOSED) {
+          stopLive(true);
+          tbody.dataset.placeholder = '1';
+          tbody.innerHTML = '<tr><td colspan="5" class="muted">实时连接失败或无权访问该项目</td></tr>';
+          resultMeta.textContent = '实时已终止';
+          showNotice('实时连接已终止，请确认项目权限后重试。', true);
+        } else {
+          showNotice('实时连接中断，浏览器将自动重连…', true);
+        }
       });
 
       updateLiveMeta();
@@ -481,22 +577,70 @@
     document.getElementById('rangeTabs').addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-range]');
       if (!btn) return;
-      rangeMinutes = Number(btn.dataset.range);
+      rangeMode = btn.dataset.range;
+      if (rangeMode === 'custom') {
+        if (!customRange) {
+          const end = new Date();
+          customRange = { start: new Date(end.getTime() - 60 * 60 * 1000), end };
+        }
+        fillCustomInputs();
+      }
+      page = 1;
       syncRangeTabs();
       updateRangeHint();
-      nextCursor = null;
       await loadFilters();
+    });
+
+    [startInput, endInput].forEach(input => {
+      input.addEventListener('change', () => {
+        rangeMode = 'custom';
+        customRange = readCustomInputs();
+        syncRangeTabs();
+        updateRangeHint();
+      });
+    });
+
+    document.getElementById('btnApplyCustom').addEventListener('click', async () => {
+      rangeMode = 'custom';
+      customRange = readCustomInputs();
+      syncRangeTabs();
+      updateRangeHint();
+      if (!customRange) {
+        showNotice('请填写有效的开始/结束时间（开始需早于结束）', true);
+        return;
+      }
+      page = 1;
+      await loadFilters();
+      await search();
     });
 
     projectSelect.addEventListener('change', async () => {
-      nextCursor = null;
+      page = 1;
       await loadFilters();
     });
 
-    btnSearch.addEventListener('click', () => search(false));
-    btnMore.addEventListener('click', () => search(true));
+    btnSearch.addEventListener('click', () => { page = 1; search(); });
+    btnPrev.addEventListener('click', () => {
+      if (page <= 1) return;
+      page--;
+      search();
+    });
+    btnNext.addEventListener('click', () => {
+      page++;
+      search();
+    });
+    pageSizeSelect.addEventListener('change', () => {
+      pageSize = Number(pageSizeSelect.value);
+      page = 1;
+      search();
+    });
+
     document.getElementById('btnReset').addEventListener('click', async () => {
-      rangeMinutes = 15;
+      rangeMode = '15';
+      customRange = null;
+      startInput.value = '';
+      endInput.value = '';
+      page = 1;
       serviceSelect.value = '';
       levelSelect.value = '';
       keywordInput.value = '';
@@ -504,14 +648,14 @@
       syncRangeTabs();
       updateRangeHint();
       await loadFilters();
-      await search(false);
+      await search();
     });
 
     keywordInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') search(false);
+      if (e.key === 'Enter') { page = 1; search(); }
     });
     traceInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') search(false);
+      if (e.key === 'Enter') { page = 1; search(); }
     });
 
     tbody.addEventListener('click', (e) => {
@@ -528,6 +672,21 @@
     if (params.get('traceId')) traceInput.value = params.get('traceId');
     if (params.get('service')) serviceSelect.dataset.preset = params.get('service');
     if (params.get('level')) levelSelect.dataset.preset = params.get('level');
+    if (rangeMode === 'custom') {
+      const s = params.get('start');
+      const e = params.get('end');
+      if (s && e) {
+        const start = new Date(s);
+        const end = new Date(e);
+        if (!isNaN(start) && !isNaN(end) && start < end) customRange = { start, end };
+      }
+      if (!customRange) {
+        const end = new Date();
+        customRange = { start: new Date(end.getTime() - 60 * 60 * 1000), end };
+      }
+      fillCustomInputs();
+    }
+    if (pageSizeSelect) pageSizeSelect.value = String(pageSize);
 
     syncRangeTabs();
     updateRangeHint();
@@ -536,7 +695,7 @@
         if (serviceSelect.dataset.preset) serviceSelect.value = serviceSelect.dataset.preset;
         if (levelSelect.dataset.preset) levelSelect.value = levelSelect.dataset.preset;
         if (projectSelect.value && (params.get('auto') === '1' || params.get('projectId'))) {
-          await search(false);
+          await search();
         }
       })
       .catch(e => showNotice(e.message || '加载失败', true));

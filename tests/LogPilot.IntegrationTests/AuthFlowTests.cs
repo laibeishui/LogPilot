@@ -95,4 +95,61 @@ public sealed class AuthFlowTests : IClassFixture<WebApplicationFactory<Program>
             && apiKeyProp.GetString()!.StartsWith("lp_")
             && apiKeyProp.GetString()!.Length > 20);
     }
+
+    [Fact]
+    public async Task ManagementApi_WithoutValidCsrfHeader_IsRejected()
+    {
+        var client = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true
+        });
+
+        var tokenResponse = await client.GetFromJsonAsync<JsonElement>("/api/v1/antiforgery/token");
+        var csrf = tokenResponse.GetProperty("token").GetString()!;
+
+        using (var setupRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/setup/admin"))
+        {
+            setupRequest.Headers.Add("X-CSRF-TOKEN", csrf);
+            setupRequest.Content = JsonContent.Create(new
+            {
+                username = "admin",
+                password = "password123",
+                displayName = "Admin"
+            });
+            var setupResponse = await client.SendAsync(setupRequest);
+            Assert.Equal(HttpStatusCode.OK, setupResponse.StatusCode);
+        }
+
+        tokenResponse = await client.GetFromJsonAsync<JsonElement>("/api/v1/antiforgery/token");
+        csrf = tokenResponse.GetProperty("token").GetString()!;
+
+        // 完全不带 CSRF 头
+        using (var missing = new HttpRequestMessage(HttpMethod.Post, "/api/v1/projects"))
+        {
+            missing.Content = JsonContent.Create(new { name = "NoCsrf", code = "no-csrf" });
+            var response = await client.SendAsync(missing);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+            Assert.Equal("ANTIFORGERY_FAILED", error.GetProperty("code").GetString());
+        }
+
+        // 伪造 CSRF 头
+        using (var forged = new HttpRequestMessage(HttpMethod.Post, "/api/v1/projects"))
+        {
+            forged.Headers.Add("X-CSRF-TOKEN", "not-a-real-token");
+            forged.Content = JsonContent.Create(new { name = "ForgedCsrf", code = "forged-csrf" });
+            var response = await client.SendAsync(forged);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        // 携带有效 CSRF 头才允许通过
+        using (var valid = new HttpRequestMessage(HttpMethod.Post, "/api/v1/projects"))
+        {
+            valid.Headers.Add("X-CSRF-TOKEN", csrf);
+            valid.Content = JsonContent.Create(new { name = "WithCsrf", code = "with-csrf" });
+            var response = await client.SendAsync(valid);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+    }
 }

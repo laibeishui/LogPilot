@@ -1,4 +1,5 @@
-﻿@using System.Security.Claims
+@using System.Security.Claims
+@using LogPilot.Web.Security
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -11,6 +12,7 @@
 @{
   var current = ViewContext.RouteData.Values["controller"]?.ToString() ?? "Home";
   var displayName = User.Identity?.Name ?? "用户";
+  var isSystemAdmin = User.IsSystemAdmin();
 }
   <div class="layout">
     <aside class="nav">
@@ -20,6 +22,10 @@
       <a class="nav-link @(current == "Logs" ? "active" : null)" asp-controller="Logs" asp-action="Index"><span>☷</span><span class="txt">日志检索</span></a>
       <a class="nav-link @(current == "Projects" ? "active" : null)" asp-controller="Projects" asp-action="Index"><span>▣</span><span class="txt">项目管理</span></a>
       <a class="nav-link @(current == "Integrations" ? "active" : null)" asp-controller="Integrations" asp-action="Index"><span>⇄</span><span class="txt">接入中心</span></a>
+      @if (isSystemAdmin)
+      {
+        <a class="nav-link @(current == "Users" ? "active" : null)" asp-controller="Users" asp-action="Index"><span>☺</span><span class="txt">人员管理</span></a>
+      }
       <div class="navtitle">规划功能</div>
       <a class="nav-link @(current == "Alerts" ? "active" : null)" asp-controller="Alerts" asp-action="Index"><span>♧</span><span class="txt">告警中心</span></a>
       <a class="nav-link @(current == "Settings" ? "active" : null)" asp-controller="Settings" asp-action="Index"><span>⚙</span><span class="txt">系统设置</span></a>
@@ -31,6 +37,7 @@
         <div class="topright">
           <span class="pill">已登录</span>
           <span class="small">@displayName</span>
+          <button class="btn" id="changePwdBtn" type="button">修改密码</button>
           <button class="btn" id="logoutBtn" type="button">退出</button>
         </div>
       </div>
@@ -39,6 +46,27 @@
       </div>
     </main>
   </div>
+
+  <div class="drawer-back" id="pwdBack"></div>
+  <aside class="drawer" id="pwdDrawer" aria-hidden="true">
+    <header>
+      <h2>修改密码</h2>
+      <button class="btn" id="pwdClose" type="button">关闭</button>
+    </header>
+    <div class="inner">
+      <label class="label">原密码</label>
+      <input class="field" id="pwdCurrent" type="password" maxlength="128" />
+      <label class="label">新密码（8–128 位）</label>
+      <input class="field" id="pwdNew" type="password" maxlength="128" />
+      <label class="label">确认新密码</label>
+      <input class="field" id="pwdConfirm" type="password" maxlength="128" />
+      <div class="notice" id="pwdNotice" style="display:none;margin-top:14px"></div>
+      <div style="margin-top:16px">
+        <button class="btn primary" id="pwdSave" type="button">保存</button>
+      </div>
+    </div>
+  </aside>
+
   <script src="~/js/common/api-client.js" asp-append-version="true"></script>
   <script src="~/js/site.js" asp-append-version="true"></script>
   <script>
@@ -48,6 +76,50 @@
       } catch (_) { /* ignore */ }
       location.href = '/account/login';
     });
+
+    (() => {
+      const drawer = document.getElementById('pwdDrawer');
+      const back = document.getElementById('pwdBack');
+      const notice = document.getElementById('pwdNotice');
+      const open = () => {
+        notice.style.display = 'none';
+        ['pwdCurrent', 'pwdNew', 'pwdConfirm'].forEach(id => { document.getElementById(id).value = ''; });
+        drawer.classList.add('open');
+        back.classList.add('open');
+      };
+      const close = () => {
+        drawer.classList.remove('open');
+        back.classList.remove('open');
+      };
+
+      document.getElementById('changePwdBtn')?.addEventListener('click', open);
+      document.getElementById('pwdClose')?.addEventListener('click', close);
+      back?.addEventListener('click', close);
+
+      document.getElementById('pwdSave')?.addEventListener('click', async () => {
+        const currentPassword = document.getElementById('pwdCurrent').value;
+        const newPassword = document.getElementById('pwdNew').value;
+        const confirmPassword = document.getElementById('pwdConfirm').value;
+
+        if (newPassword !== confirmPassword) {
+          notice.style.display = 'block';
+          notice.textContent = '两次输入的新密码不一致。';
+          return;
+        }
+
+        try {
+          await LogPilotApi.api('/api/v1/auth/password', {
+            method: 'PUT',
+            body: { currentPassword, newPassword }
+          });
+          close();
+          alert('密码已更新');
+        } catch (e) {
+          notice.style.display = 'block';
+          notice.textContent = e.message || '修改失败';
+        }
+      });
+    })();
   </script>
   @await RenderSectionAsync("Scripts", required: false)
 </body>

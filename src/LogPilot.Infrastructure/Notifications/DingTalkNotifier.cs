@@ -58,7 +58,17 @@ public sealed class DingTalkNotifier : INotifier
                 return new NotifyResult { Succeeded = false, ErrorMessage = $"钉钉返回 HTTP {(int)response.StatusCode}: {responseText}" };
             }
 
-            // 钉钉返回 {"errcode":0,"errmsg":"ok"}
+            // 钉钉即便 HTTP 200 也可能在响应体中返回业务错误，例如
+            // {"errcode":310000,"errmsg":"keywords not in content"}，必须解析 errcode 判定成败。
+            if (TryParseErrcode(responseText, out var errcode, out var errmsg) && errcode != 0)
+            {
+                return new NotifyResult
+                {
+                    Succeeded = false,
+                    ErrorMessage = $"钉钉返回业务错误 errcode={errcode}: {errmsg}"
+                };
+            }
+
             return new NotifyResult { Succeeded = true };
         }
         catch (Exception ex)
@@ -127,6 +137,45 @@ public sealed class DingTalkNotifier : INotifier
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+
+    /// <summary>
+    /// 解析钉钉响应体中的 errcode/errmsg。返回 false 表示响应不是预期的 JSON 结构（如网关返回的非 JSON 内容）。
+    /// </summary>
+    private static bool TryParseErrcode(string responseText, out int errcode, out string errmsg)
+    {
+        errcode = 0;
+        errmsg = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(responseText))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(responseText);
+            var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object
+                || !root.TryGetProperty("errcode", out var codeElement)
+                || codeElement.ValueKind != System.Text.Json.JsonValueKind.Number)
+            {
+                return false;
+            }
+
+            errcode = codeElement.GetInt32();
+            if (root.TryGetProperty("errmsg", out var msgElement)
+                && msgElement.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                errmsg = msgElement.GetString() ?? string.Empty;
+            }
+
+            return true;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
 
     private sealed class DingTalkConfig
     {
