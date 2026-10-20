@@ -10,6 +10,10 @@
   --red: #e44d5d;
   --orange: #d99725;
   --radius: 13px;
+  /* 水平留白随视口平滑放大 */
+  --gutter: clamp(20px, 1.5vw, 40px);
+  /* 内容区宽度：按视口比例铺开，仅在超宽屏下留出等比例的呼吸边距 */
+  --shell-max: max(1440px, 88vw);
 }
 
 * { box-sizing: border-box; }
@@ -95,12 +99,22 @@ a { color: var(--blue); text-decoration: none; }
 .main { min-width: 0; }
 
 .top {
-  background: #fff;
+  background: #fffffff2;
+  backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--line);
-  padding: 17px 29px;
+  position: sticky;
+  top: 0;
+  z-index: 12;
+}
+
+.top-inner {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
+  padding: 16px var(--gutter);
+  max-width: var(--shell-max);
+  margin: 0 auto;
 }
 
 .top .crumb { color: #8c99aa; }
@@ -114,9 +128,9 @@ a { color: var(--blue); text-decoration: none; }
 }
 
 .content {
-  padding: 28px 30px;
-  max-width: 1550px;
-  margin: auto;
+  padding: 26px var(--gutter) 44px;
+  max-width: var(--shell-max);
+  margin: 0 auto;
 }
 
 .headline {
@@ -402,5 +416,5 @@ tr.clickable:hover { background: #f7f9fe; cursor: pointer; }
   }
   .brand { display: none; }
   .nav .nav-link { width: auto; flex: none; }
-  .content { padding: 18px 12px; }
+  .content { padding: 18px 14px 30px; }
 }
